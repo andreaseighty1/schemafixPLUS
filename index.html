@@ -158,15 +158,15 @@ function getFridayShift(person, week, cycleWeeks, fridayTemplateRotation = []) {
   return null;
 }
 
-// Snittlig fredagstid över cykeln (för veckotim-räkning)
-function avgFridayMinutes(person, cycleWeeks, fridayTemplateRotation = []) {
-  if (!person.hasFridayRotation && person.fridayShift) return dayMinutes(person.fridayShift);
+// Snittlig fredagstid över cykeln, räknad som arbetstid efter rastregel.
+function avgFridayWorkedMinutes(person, cycleWeeks, fridayTemplateRotation = []) {
+  if (!person.hasFridayRotation && person.fridayShift) return workedDayMinutes(person.fridayShift);
   if (!person.hasFridayRotation) return 0;
   if (!person.fridayUseTemplate && (!Array.isArray(person.fridayRotation) || person.fridayRotation.length === 0)) return 0;
   let sum = 0;
   for (let w = 1; w <= cycleWeeks; w++) {
     const sh = getFridayShift(person, w, cycleWeeks, fridayTemplateRotation);
-    if (sh) sum += dayMinutes(sh);
+    if (sh) sum += workedDayMinutes(sh);
   }
   return sum / cycleWeeks;
 }
@@ -242,6 +242,8 @@ const PASS_TYPE_IDS = PASS_TYPES.map(type => type.id);
 const ASSIGNMENT_TYPES = [
   { id: 'fritids', label: 'Fritids', color: '#0f766e', short: 'Fritids' },
   { id: 'school', label: 'Skoldel', color: '#475569', short: 'Skoldel' },
+  { id: 'opening', label: 'Öppning', color: '#0284c7', short: 'Öppning' },
+  { id: 'closing', label: 'Stängning', color: '#b45309', short: 'Stängning' },
   { id: 'lesson', label: 'Lektion', color: '#7c3aed', short: 'Lektion' },
   { id: 'break', label: 'Rast', color: '#059669', short: 'Rast' },
   { id: 'pedLunch', label: 'Pedagogisk lunch', color: '#65a30d', short: 'Ped.lunch' },
@@ -273,6 +275,85 @@ const ASSIGNMENT_TEMPLATES = [
 ];
 const initialAssignments = {};
 const initialDriftState = { dayKey: 'mon', absences: {} };
+const WORKFLOW_MODE_GENERATE = 'generate';
+const WORKFLOW_MODE_EXISTING = 'existing';
+const APP_NAV_ITEMS = [
+  { k: 'schedule', label: 'Vecka', icon: Calendar },
+  { k: 'staff', label: 'Personal', icon: Users },
+  { k: 'tasks', label: 'Uppdrag', icon: Briefcase },
+  { k: 'drift', label: 'Drift', icon: AlertCircle },
+  { k: 'rules', label: 'Bemanning', icon: Clock },
+  { k: 'settings', label: 'Inställningar', icon: Settings },
+];
+
+function normalizeWorkflowMode(mode) {
+  return mode === WORKFLOW_MODE_EXISTING ? WORKFLOW_MODE_EXISTING : WORKFLOW_MODE_GENERATE;
+}
+
+function getWorkflowModeMeta(mode) {
+  const normalized = normalizeWorkflowMode(mode);
+  if (normalized === WORKFLOW_MODE_EXISTING) {
+    return {
+      id: WORKFLOW_MODE_EXISTING,
+      label: 'Jag har redan ett schema',
+      shortLabel: 'Befintligt schema',
+      description: 'Lägg in personalen och skriv eller justera arbetspass direkt i Vecka. Generatorn blir då ett valfritt extra verktyg i stället för startpunkten.',
+      steps: [
+        'Lägg in personal och grunduppgifter i Personal.',
+        'Skriv in eller justera passen direkt i Vecka.',
+        'Fortsätt sedan till Uppdrag och Drift.',
+      ],
+    };
+  }
+  return {
+    id: WORKFLOW_MODE_GENERATE,
+    label: 'Jag vill ha hjälp att pussla schema',
+    shortLabel: 'Pussla schema',
+    description: 'Bygg upp passbank, bemanning och regler och låt sedan appen räkna fram schemaförslag som du finjusterar vidare.',
+    steps: [
+      'Ställ in avdelningar, passbank och regler.',
+      'Låt appen generera och justera sedan passen i Vecka.',
+      'Lägg därefter på Uppdrag och använd Drift vid frånvaro.',
+    ],
+  };
+}
+
+function getWorkflowTour(mode) {
+  const normalized = normalizeWorkflowMode(mode);
+  if (normalized === WORKFLOW_MODE_EXISTING) {
+    return [
+      { view: 'staff', title: 'Steg 1 av 6 · Personal', desc: 'Lägg in kollegorna som redan finns i ert schema. Börja med namn, avdelning, tjänstgöring och fredagsrutin.' },
+      { view: 'schedule', title: 'Steg 2 av 6 · Vecka', desc: 'Här lägger du in eller justerar befintliga arbetspass direkt. Klicka på en stapel eller rad för att skriva tider manuellt.' },
+      { view: 'tasks', title: 'Steg 3 av 6 · Uppdrag', desc: 'När grundpassen finns kan du lägga på lektioner, rastvärd, öppning, stängning, samverkan och andra uppdrag.' },
+      { view: 'drift', title: 'Steg 4 av 6 · Drift', desc: 'I Drift markerar du dagens frånvaro och ser direkt vad som faller bort, vad som måste täckas och var luckor uppstår.' },
+      { view: 'settings', title: 'Steg 5 av 6 · Inställningar', desc: 'Här hittar du bland annat fredagscykeln, passbanken och annan grundkonfiguration som påverkar hur appen tolkar schemat.' },
+      { view: 'rules', title: 'Steg 6 av 6 · Bemanning', desc: 'Om du vill använda bemanningskontroll eller jämföra mot täckningskrav lägger du in block här. Generatorn är valfri i detta arbetssätt.' },
+    ];
+  }
+  return [
+    { view: 'settings', title: 'Steg 1 av 6 · Inställningar', desc: 'Börja med avdelningar, passbank och fredagscykel så att appen vet hur ert fritidshem är uppbyggt.' },
+    { view: 'staff', title: 'Steg 2 av 6 · Personal', desc: 'Lägg sedan till en kollega i taget med tjänstgöring, tillåtna pass, fredagsrutin och viktiga regler.' },
+    { view: 'rules', title: 'Steg 3 av 6 · Bemanning', desc: 'Här talar du om hur många som behöver vara på plats över dagen, gemensamt eller per avdelning.' },
+    { view: 'schedule', title: 'Steg 4 av 6 · Vecka', desc: 'När grunderna finns kan appen pussla fram förslag. Här ser du resultatet och kan finjustera tider manuellt.' },
+    { view: 'tasks', title: 'Steg 5 av 6 · Uppdrag', desc: 'När grundschemat sitter lägger du på dagens innehåll som lektioner, rastvärd, öppning, stängning och andra uppdrag.' },
+    { view: 'drift', title: 'Steg 6 av 6 · Drift', desc: 'I Drift ser du vad som faller bort vid frånvaro och vilka delar av dagen som behöver akut täckning.' },
+  ];
+}
+
+function getTabHelpText(tabKey, workflowMode) {
+  const mode = normalizeWorkflowMode(workflowMode);
+  const map = {
+    schedule: mode === WORKFLOW_MODE_EXISTING
+      ? 'Här lägger du in eller justerar befintliga arbetspass direkt i veckan.'
+      : 'Här granskar du schemaförslag och kan finjustera tider manuellt.',
+    staff: 'Här lägger du in personal, tjänstgöring, roller, fredagsrutin och viktiga regler.',
+    tasks: 'Här lägger du uppdrag ovanpå grundschemat, som lektioner, rastvärd, öppning och stängning.',
+    drift: 'Här markerar du frånvaro och ser direkt vad som faller bort och behöver täckas.',
+    rules: 'Här lägger du bemanningskrav över dagen, gemensamt eller per avdelning.',
+    settings: 'Här hittar du passbank, fredagscykel, avdelningar och annan grundkonfiguration.',
+  };
+  return map[tabKey] || '';
+}
 
 function getAssignmentTypeMeta(typeId) {
   return ASSIGNMENT_TYPES.find(type => type.id === typeId) || ASSIGNMENT_TYPES[ASSIGNMENT_TYPES.length - 1];
@@ -291,6 +372,9 @@ function assignmentRequiresCoverByDefault(typeId) {
 }
 function assignmentCanReleaseByDefault(typeId) {
   return ['resource', 'planning'].includes(typeId);
+}
+function assignmentIsBoundaryType(typeId) {
+  return ['opening', 'closing'].includes(typeId);
 }
 function assignmentCountsAsBreak(task) {
   return ['break', 'pedLunch'].includes(task?.type);
@@ -819,6 +903,22 @@ function timeToMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Num
 function minToTime(m) { const h = Math.floor(m / 60); const mm = m % 60; return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`; }
 function minToHM(min) { const h = Math.floor(Math.abs(min) / 60); const m = Math.abs(min) % 60; const sign = min < 0 ? '-' : ''; return `${sign}${h} h ${m} min`; }
 function dayMinutes(sched) { return timeToMin(sched[1]) - timeToMin(sched[0]); }
+const MANDATORY_BREAK_AFTER_MINUTES = 5 * 60;
+const MANDATORY_BREAK_MINUTES = 30;
+function getMandatoryBreakMinutes(rawMinutes) {
+  return Number.isFinite(rawMinutes) && rawMinutes > MANDATORY_BREAK_AFTER_MINUTES ? MANDATORY_BREAK_MINUTES : 0;
+}
+function workedMinutesFromSpan(rawMinutes) {
+  if (!Number.isFinite(rawMinutes)) return 0;
+  return Math.max(0, rawMinutes - getMandatoryBreakMinutes(rawMinutes));
+}
+function workedDayMinutes(sched) {
+  return workedMinutesFromSpan(dayMinutes(sched));
+}
+function suggestedShiftMinutesFromWorkedTarget(workedMinutes) {
+  if (!Number.isFinite(workedMinutes)) return 0;
+  return workedMinutes > MANDATORY_BREAK_AFTER_MINUTES ? workedMinutes + MANDATORY_BREAK_MINUTES : workedMinutes;
+}
 function parseFlexibleTimeInput(value) {
   const raw = String(value ?? '').trim().replace(/[.,]/g, ':');
   if (!raw) return null;
@@ -1450,7 +1550,7 @@ function getAvailableEligiblePassesForDay(person, dayKey, staff, passBank = []) 
 
 function getSuggestedDayMinutes(person, cycleWeeks, fridayTemplateRotation = []) {
   // För passbank-personer räknas fredag som en vanlig arbetsdag.
-  // För övriga lägen hanteras fredag separat via avgFridayMinutes och ingår
+  // För övriga lägen hanteras fredag separat via avgFridayWorkedMinutes och ingår
   // inte i denna per-vardags-uppdelning.
   const isPassbank = person.fridayMode === 'passbank';
   const dayKeys = isPassbank ? [...WEEKDAY_KEYS, 'fri'] : WEEKDAY_KEYS;
@@ -1466,12 +1566,13 @@ function getSuggestedDayMinutes(person, cycleWeeks, fridayTemplateRotation = [])
   // Cold-start: ingen tilldelning än. Räkna ut snittlängd från målet.
   if (isPassbank) {
     const workingDays = dayKeys.filter(key => !(person.daysOff || []).includes(key)).length || dayKeys.length;
-    return clamp(roundToStep(getTargetMin(person) / workingDays), 60, 600);
+    const workedPerDay = getTargetMin(person) / workingDays;
+    return clamp(roundToStep(suggestedShiftMinutesFromWorkedTarget(workedPerDay)), 60, 600);
   }
   const workingDays = DAYS.filter(d => !(person.daysOff || []).includes(d.key)).length || DAYS.length;
-  const fridayMinutes = avgFridayMinutes(person, cycleWeeks, fridayTemplateRotation);
-  const remaining = Math.max(workingDays * 60, getTargetMin(person) - fridayMinutes);
-  return clamp(roundToStep(remaining / workingDays), 60, 600);
+  const fridayWorkedMinutes = avgFridayWorkedMinutes(person, cycleWeeks, fridayTemplateRotation);
+  const remainingWorked = Math.max(workingDays * 60, getTargetMin(person) - fridayWorkedMinutes);
+  return clamp(roundToStep(suggestedShiftMinutesFromWorkedTarget(remainingWorked / workingDays)), 60, 600);
 }
 
 function buildFallbackShift(person, dayKey, cycleWeeks, fridayTemplateRotation = []) {
@@ -1726,15 +1827,15 @@ function prepareStaffForUse(staff, cycleWeeks = 8, fridayTemplateRotation = [], 
 }
 function weeklyMinutes(staff, cycleWeeks = 8, fridayTemplateRotation = []) {
   let total = 0;
-  for (const d of DAYS) if (staff.sched?.[d.key]) total += dayMinutes(staff.sched[d.key]);
+  for (const d of DAYS) if (staff.sched?.[d.key]) total += workedDayMinutes(staff.sched[d.key]);
   // Fredag: passbank-läget räknar sched.fri direkt; övriga lägen använder
-  // legacy-snittet över rullen (avgFridayMinutes returnerar 0 för passbank-läge
+  // legacy-snittet över rullen (avgFridayWorkedMinutes returnerar 0 för passbank-läge
   // eftersom fridayShift och fridayRotation då är tomma, så vi kan inte bara
   // alltid kalla det – vi måste byta beräkningssätt baserat på läge).
   if (staff.fridayMode === 'passbank') {
-    if (staff.sched?.fri) total += dayMinutes(staff.sched.fri);
+    if (staff.sched?.fri) total += workedDayMinutes(staff.sched.fri);
   } else {
-    total += avgFridayMinutes(staff, cycleWeeks, fridayTemplateRotation);
+    total += avgFridayWorkedMinutes(staff, cycleWeeks, fridayTemplateRotation);
   }
   return Math.round(total);
 }
@@ -2677,6 +2778,7 @@ function FritidsSchemaApp() {
   const [assignmentDay, setAssignmentDay] = useState('mon');
   const [driftState, setDriftState] = useState(initialDriftState);
   const [view, setView] = useState('schedule');
+  const [workflowMode, setWorkflowModeState] = useState(WORKFLOW_MODE_GENERATE);
   const [editingId, setEditingId] = useState(null);
   const [assignmentEditor, setAssignmentEditor] = useState(null);
   const [generating, setGenerating] = useState(false);
@@ -2691,6 +2793,7 @@ function FritidsSchemaApp() {
   const [showWelcome, setShowWelcome] = useState(false);
   const [showExamplePicker, setShowExamplePicker] = useState(false);
   const [tourStep, setTourStep] = useState(null); // null = ingen tur aktiv, annars 0..5
+  const [tourMode, setTourMode] = useState(WORKFLOW_MODE_GENERATE);
 
   // När cykellängden ändras: justera alla personers fridayRotation till rätt längd,
   // och håll currentFridayWeek inom giltigt intervall.
@@ -2715,15 +2818,29 @@ function FritidsSchemaApp() {
   // Autospar i localStorage som backup. Den primära "sanningen" är dock filen
   // som användaren själv exporterar/importerar — så data följer med mellan datorer/kollegor.
   const STORAGE_KEY = 'fritids-schema-v1';
+  const WORKFLOW_MODE_STORAGE_KEY = 'schemafix-workflow-mode-v1';
+
+  const activateWorkflowMode = (mode, options = {}) => {
+    const normalized = normalizeWorkflowMode(mode);
+    setWorkflowModeState(normalized);
+    if (options.navigate === false) return;
+    if (normalized === WORKFLOW_MODE_EXISTING) {
+      setView(staff.length > 0 ? 'schedule' : 'staff');
+      return;
+    }
+    setView((departments.length > 0 && staff.length > 0) ? 'schedule' : 'settings');
+  };
 
   // Ladda backup vid start
   useEffect(() => {
     let foundData = false;
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
+      const storedWorkflowMode = normalizeWorkflowMode(localStorage.getItem(WORKFLOW_MODE_STORAGE_KEY));
         if (raw) {
           foundData = true;
           const data = JSON.parse(raw);
+          setWorkflowModeState(normalizeWorkflowMode(data.workflowMode || storedWorkflowMode));
           const normalizedStaff = normalizeStaffList(data.staff || [], data.fridayCycleWeeks || 8);
           if (data.staff) {
             setStaff(normalizedStaff);
@@ -2739,6 +2856,8 @@ function FritidsSchemaApp() {
           if (data.fridayCycleWeeks) setFridayCycleWeeksRaw(data.fridayCycleWeeks);
           setFridayTemplateRotation(resizeRotation(data.fridayTemplateRotation, data.fridayCycleWeeks || 8));
           if (data.savedFileName) setSavedFileName(data.savedFileName);
+        } else {
+          setWorkflowModeState(storedWorkflowMode);
         }
     } catch (err) {
       console.error('Kunde inte läsa backup från localStorage:', err);
@@ -2756,21 +2875,18 @@ function FritidsSchemaApp() {
     setShowWelcome(false);
   };
 
-  const startTour = () => {
+  const startTour = (mode = workflowMode) => {
+    const normalized = normalizeWorkflowMode(mode);
+    activateWorkflowMode(normalized, { navigate: false });
     dismissWelcome();
-    setView('settings');
+    setTourMode(normalized);
+    const tour = getWorkflowTour(normalized);
+    setView(tour[0]?.view || 'settings');
     setTourStep(0);
   };
 
   const nextTourStep = () => {
-    const tour = [
-      { view: 'settings' },  // 0: avdelningar
-      { view: 'staff' },     // 1: personal
-      { view: 'tasks' },     // 2: uppdrag
-      { view: 'drift' },     // 3: drift
-      { view: 'rules' },     // 4: bemanningskrav
-      { view: 'schedule' },  // 5: vecka + generera
-    ];
+    const tour = getWorkflowTour(tourMode);
     const next = (tourStep ?? -1) + 1;
     if (next >= tour.length) {
       setTourStep(null);
@@ -2788,18 +2904,19 @@ function FritidsSchemaApp() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         staff: normalizeStaffList(staff, fridayCycleWeeks),
-        departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff), fridayCycleWeeks, fridayTemplateRotation, savedFileName,
+        departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff), fridayCycleWeeks, fridayTemplateRotation, savedFileName, workflowMode,
       }));
+      localStorage.setItem(WORKFLOW_MODE_STORAGE_KEY, workflowMode);
     } catch {}
     setDirty(true);
-  }, [staff, departments, normalizedCoverageBlocks, passBank, assignments, normalizedAssignmentWindows, driftState, fridayCycleWeeks, fridayTemplateRotation, loaded]);
+  }, [staff, departments, normalizedCoverageBlocks, passBank, assignments, normalizedAssignmentWindows, driftState, fridayCycleWeeks, fridayTemplateRotation, workflowMode, loaded]);
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 7,
+    version: 8,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
-    departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff), fridayCycleWeeks, fridayTemplateRotation,
+    departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
     // Snapshot av staff från senaste utgångspunkt – används av schemavyn
     // för att visa vad som ändrats manuellt sedan generering/inläsning.
     baselineStaff: baselineStaff ? normalizeStaffList(baselineStaff, fridayCycleWeeks) : null,
@@ -2906,6 +3023,7 @@ function FritidsSchemaApp() {
           ? normalizeStaffList(data.baselineStaff, data.fridayCycleWeeks || 8)
           : JSON.parse(JSON.stringify(normalizedStaff));
         setBaselineStaff(loadedBaseline);
+        setWorkflowModeState(normalizeWorkflowMode(data.workflowMode || WORKFLOW_MODE_GENERATE));
         setDepartments(loadedDepartments);
         setCoverageBlocks(normalizeCoverageBlocks(data.coverageBlocks || initialCoverageBlocks, loadedDepartments));
         setPassBank(normalizePassBank(data.passBank || initialPassBank));
@@ -2949,6 +3067,7 @@ function FritidsSchemaApp() {
     const normalizedStaff = normalizeStaffList(scenario.staff, scenario.fridayCycleWeeks);
     setStaff(normalizedStaff);
     setBaselineStaff(JSON.parse(JSON.stringify(normalizedStaff)));
+    setWorkflowModeState(WORKFLOW_MODE_GENERATE);
     setDepartments(scenario.departments);
     setCoverageBlocks(normalizeCoverageBlocks(scenario.coverageBlocks, scenario.departments));
     setPassBank(normalizePassBank(scenario.passBank || initialPassBank));
@@ -2975,7 +3094,12 @@ function FritidsSchemaApp() {
     setDriftState(normalizeDriftState(initialDriftState, []));
   };
   const openAssignmentEditor = (personId, dayKey) => setAssignmentEditor({ personId, dayKey });
-  const saveAssignmentsForDay = (personId, dayKey, nextList, copyDayKeys = []) => {
+  const saveAssignmentsForDay = (personId, dayKey, nextList, copyDayKeys = [], copyPersonIds = []) => {
+    const fridayOptions = {
+      fridayWeek: dayKey === 'fri' ? currentFridayWeek : 1,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    };
     setAssignments(prev => {
       let next = replaceAssignmentsForDay(prev, personId, dayKey, nextList, staff);
       (Array.isArray(copyDayKeys) ? copyDayKeys : []).forEach(copyDayKey => {
@@ -2984,6 +3108,17 @@ function FritidsSchemaApp() {
           id: createAssignmentId(),
         }));
         next = replaceAssignmentsForDay(next, personId, copyDayKey, clonedList, staff);
+      });
+      (Array.isArray(copyPersonIds) ? copyPersonIds : []).forEach(copyPersonId => {
+        const target = staff.find(member => String(member.id) === String(copyPersonId));
+        if (!target) return;
+        const targetShift = getShiftForDay(target, dayKey, fridayOptions);
+        if (!targetShift) return;
+        const clonedList = (Array.isArray(nextList) ? nextList : []).map(task => ({
+          ...task,
+          id: createAssignmentId(),
+        }));
+        next = replaceAssignmentsForDay(next, target.id, dayKey, clonedList, staff);
       });
       return next;
     });
@@ -3333,7 +3468,7 @@ function FritidsSchemaApp() {
               <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Fritidshem · schemaverktyg</p>
               <h1 className="display-font text-4xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>SchemaFIX</h1>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <p className="text-stone-600 text-sm">Prototyp v37 · uppdragsblock följer tid</p>
+              <p className="text-stone-600 text-sm">Prototyp v41 · rastregel i timräkningen</p>
                 {dirty && (
                   <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
                     <Circle size={6} fill="currentColor" />
@@ -3374,31 +3509,25 @@ function FritidsSchemaApp() {
               )}
             </div>
             <button onClick={handleGenerate} disabled={generating || staff.length === 0}
+              title={workflowMode === WORKFLOW_MODE_EXISTING ? 'Valfritt: låt appen pussla ett nytt schemaförslag om du vill jämföra med ditt befintliga schema.' : 'Låt appen pussla fram tre schemaförslag utifrån regler och bemanning.'}
               className="px-4 py-2.5 rounded-full text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2 disabled:opacity-50">
               <Wand2 size={14} />
-              {generating ? 'Räknar...' : 'Generera schemaförslag'}
+              {generating ? 'Räknar...' : workflowMode === WORKFLOW_MODE_EXISTING ? 'Pussla nytt förslag' : 'Generera schemaförslag'}
             </button>
             <button onClick={() => setShowWelcome(true)} title="Hjälp och guidad tur"
               className="p-2 rounded-full text-stone-500 hover:bg-stone-200/60 hover:text-stone-800 transition">
               <HelpCircle size={18} />
             </button>
             <div className="flex gap-1 p-1 rounded-full bg-stone-200/60 flex-wrap">
-              {[
-                { k: 'schedule', label: 'Vecka', icon: Calendar },
-                { k: 'staff',    label: 'Personal', icon: Users },
-                { k: 'tasks',    label: 'Uppdrag', icon: Briefcase },
-                { k: 'drift',    label: 'Drift', icon: AlertCircle },
-                { k: 'rules',    label: 'Bemanning', icon: Clock },
-                { k: 'settings', label: 'Inställningar', icon: Settings },
-              ].map(t => {
-                const Icon = t.icon;
-                return (
-                  <button key={t.k} onClick={() => setView(t.k)}
-                    className={`px-4 py-2 rounded-full text-sm flex items-center gap-2 transition ${view === t.k ? 'bg-white shadow-sm text-stone-900' : 'text-stone-600 hover:text-stone-900'}`}>
-                    <Icon size={14} />{t.label}
-                  </button>
-                );
-              })}
+              {APP_NAV_ITEMS.map(item => (
+                <NavTabButton
+                  key={item.k}
+                  item={item}
+                  workflowMode={workflowMode}
+                  active={view === item.k}
+                  onClick={() => setView(item.k)}
+                />
+              ))}
             </div>
           </div>
         </header>
@@ -3406,12 +3535,27 @@ function FritidsSchemaApp() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <StatCard label="Personal" value={staff.length} sub="aktiva" />
           <StatCard label="Veckotimmar tot." value={minToHM(staff.reduce((a, s) => a + weeklyMinutes(s, fridayCycleWeeks, fridayTemplateRotation), 0))}
-            tooltip="Summan av all personals veckotimmar. Användbart för att se den totala personalkapaciteten." />
+            tooltip="Summan av all personals veckoarbetstid. På pass längre än 5 timmar dras 30 min rast av i timräkningen." />
           <StatCard label="Underbemannade tillfällen" value={dayData.totalGaps} sub={`på ${activeDay === 'fri' ? 'fredag' : DAYS.find(d => d.key === activeDay).label.toLowerCase()}`}
             highlight={dayData.totalGaps > 0 ? 'warn' : 'ok'} />
           <StatCard label="Regelbrott" value={violations.length}
             highlight={violations.length > 0 ? 'warn' : 'ok'} sub={violations.length > 0 ? 'se Personal-fliken' : 'allt ok'} />
         </div>
+
+        <WorkflowModePanel
+          workflowMode={workflowMode}
+          staffCount={staff.length}
+          onChangeMode={activateWorkflowMode}
+          onOpenView={setView}
+          onOpenFile={openFile}
+        />
+
+        <FridayCycleBanner
+          fridayCycleWeeks={fridayCycleWeeks}
+          currentFridayWeek={currentFridayWeek}
+          onOpenSettings={() => setView('settings')}
+          onOpenSchedule={() => { setView('schedule'); setActiveDay('fri'); }}
+        />
 
         <FeasibilityPanel issues={feasibilityIssues} onGoToRules={() => setView('rules')} />
 
@@ -3483,6 +3627,9 @@ function FritidsSchemaApp() {
           person={staff.find(s => s.id === assignmentEditor.personId)}
           staff={staff}
           assignments={assignments}
+          fridayCycleWeeks={fridayCycleWeeks}
+          fridayTemplateRotation={fridayTemplateRotation}
+          currentFridayWeek={currentFridayWeek}
           dayKey={assignmentEditor.dayKey}
           shift={getShiftForDay(staff.find(s => s.id === assignmentEditor.personId) || {}, assignmentEditor.dayKey, {
             fridayWeek: currentFridayWeek,
@@ -3494,7 +3641,7 @@ function FritidsSchemaApp() {
             const prevDayKey = getPreviousDayKey(assignmentEditor.dayKey);
             return prevDayKey ? getAssignmentsForDay(assignments, assignmentEditor.personId, prevDayKey) : [];
           })()}
-          onSave={(nextList, copyDayKeys = []) => saveAssignmentsForDay(assignmentEditor.personId, assignmentEditor.dayKey, nextList, copyDayKeys)}
+          onSave={(nextList, copyDayKeys = [], copyPersonIds = []) => saveAssignmentsForDay(assignmentEditor.personId, assignmentEditor.dayKey, nextList, copyDayKeys, copyPersonIds)}
           onClose={() => setAssignmentEditor(null)}
         />
       )}
@@ -3512,11 +3659,16 @@ function FritidsSchemaApp() {
       )}
 
       {showWelcome && (
-        <WelcomeModal onClose={dismissWelcome} onStartTour={startTour} />
+        <WelcomeModal
+          currentMode={workflowMode}
+          onClose={dismissWelcome}
+          onApplyMode={(mode) => activateWorkflowMode(mode, { navigate: true })}
+          onStartTour={startTour}
+        />
       )}
 
       {tourStep !== null && (
-        <TourBubble step={tourStep} onNext={nextTourStep} onClose={endTour} />
+        <TourBubble step={tourStep} mode={tourMode} onNext={nextTourStep} onClose={endTour} />
       )}
     </div>
     {/* Print-vy: dolt på skärm, visas bara vid utskrift via window.print().
@@ -3741,6 +3893,108 @@ function TabIntro({ children }) {
   return (
     <div className="bg-stone-100/70 ring-1 ring-stone-200 rounded-lg px-4 py-3 text-sm text-stone-600 leading-relaxed">
       {children}
+    </div>
+  );
+}
+
+function NavTabButton({ item, active, onClick, workflowMode }) {
+  const [showHelp, setShowHelp] = useState(false);
+  const Icon = item.icon;
+  const helpText = getTabHelpText(item.k, workflowMode);
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setShowHelp(true)}
+      onMouseLeave={() => setShowHelp(false)}
+      onFocus={() => setShowHelp(true)}
+      onBlur={() => setShowHelp(false)}
+    >
+      <button
+        onClick={onClick}
+        title={helpText}
+        className={`px-4 py-2 rounded-full text-sm flex items-center gap-2 transition ${active ? 'bg-white shadow-sm text-stone-900' : 'text-stone-600 hover:text-stone-900'}`}
+      >
+        <Icon size={14} />{item.label}
+      </button>
+      {showHelp && (
+        <div className="absolute left-1/2 top-full mt-2 z-30 -translate-x-1/2 w-56 rounded-xl bg-stone-900 px-3 py-2 text-[11px] leading-relaxed text-stone-100 shadow-xl pointer-events-none">
+          {helpText}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkflowModePanel({ workflowMode, onChangeMode, onOpenView, onOpenFile, staffCount }) {
+  const meta = getWorkflowModeMeta(workflowMode);
+  const isExisting = normalizeWorkflowMode(workflowMode) === WORKFLOW_MODE_EXISTING;
+  return (
+    <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4 mb-6">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="max-w-3xl">
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Arbetssätt</p>
+          <h2 className="display-font text-2xl text-stone-800">{meta.shortLabel}</h2>
+          <p className="text-sm text-stone-600 mt-1">{meta.description}</p>
+          <p className="text-xs text-stone-500 mt-2">Du kan byta arbetssätt när som helst. Det ändrar inte din data, bara vilket spår appen hjälper dig genom.</p>
+        </div>
+        <div className="flex gap-1 p-1 rounded-full bg-stone-100 flex-wrap">
+          {[
+            { id: WORKFLOW_MODE_GENERATE, label: 'Pussla schema' },
+            { id: WORKFLOW_MODE_EXISTING, label: 'Befintligt schema' },
+          ].map(option => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => onChangeMode(option.id)}
+              className={`px-4 py-2 rounded-full text-sm transition ${normalizeWorkflowMode(workflowMode) === option.id ? 'bg-stone-800 text-white' : 'text-stone-700 hover:bg-white'}`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1.4fr,1fr] gap-4 mt-4">
+        <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Så jobbar du i detta läge</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            {meta.steps.map((step, idx) => (
+              <div key={`${meta.id}-step-${idx}`} className="rounded-lg bg-white ring-1 ring-stone-200 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-stone-400 mb-1">{idx + 1}</p>
+                <p className="text-sm text-stone-700">{step}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Snabbgenvägar</p>
+          <div className="flex flex-wrap gap-2">
+            {isExisting ? (
+              <>
+                <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Personal</button>
+                <button type="button" onClick={() => onOpenView('schedule')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Öppna Vecka</button>
+                <button type="button" onClick={() => onOpenView('tasks')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Uppdrag</button>
+                <button type="button" onClick={onOpenFile} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Öppna schemafil</button>
+              </>
+            ) : (
+              <>
+                <button type="button" onClick={() => onOpenView('settings')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Inställningar</button>
+                <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Personal</button>
+                <button type="button" onClick={() => onOpenView('rules')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Bemanning</button>
+                <button type="button" onClick={() => onOpenView('schedule')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Öppna Vecka</button>
+              </>
+            )}
+          </div>
+          <p className="text-xs text-stone-500 mt-3">
+            {isExisting
+              ? (staffCount > 0
+                  ? 'Du kan redan nu hoppa till Vecka och skriva eller justera pass direkt.'
+                  : 'Börja med att lägga in personalen. Därefter kan du skriva passen direkt i Vecka.')
+              : 'När grunderna är på plats kan du låta appen pussla fram förslag och sedan finjustera dem i Vecka.'}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -4147,6 +4401,41 @@ function StatCard({ label, value, sub, highlight, tooltip }) {
   );
 }
 
+function FridayCycleBanner({ fridayCycleWeeks, currentFridayWeek, onOpenSettings, onOpenSchedule }) {
+  return (
+    <div className="bg-amber-50/80 ring-1 ring-amber-200 rounded-2xl p-4 mb-6">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-xs uppercase tracking-wider text-amber-700 mb-1">Fredagscykel</p>
+          <p className="text-sm text-stone-700">
+            Appen är just nu inställd på <span style={{ fontWeight: 600 }}>{fridayCycleWeeks} veckor</span> i fredagscykeln.
+            Aktiv fredag i vyn är vecka <span style={{ fontWeight: 600 }}>{currentFridayWeek}</span>.
+          </p>
+          <p className="text-xs text-stone-500 mt-1">
+            Ändra antal veckor under <strong>Inställningar</strong> i delen <strong>Fredagscykel och fredagsrull</strong>.
+          </p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="px-3 py-2 rounded-lg text-sm bg-white text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100 transition"
+          >
+            Öppna inställningen
+          </button>
+          <button
+            type="button"
+            onClick={onOpenSchedule}
+            className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition"
+          >
+            Visa fredag i Vecka
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FeasibilityPanel({ issues, onGoToRules }) {
   if (!issues || issues.length === 0) return null;
   const visible = issues.slice(0, 6);
@@ -4353,7 +4642,7 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-12 text-center">
         <div className="display-font text-2xl text-stone-800 mb-2">Inget schema än</div>
         <p className="text-sm text-stone-500 mb-6 max-w-md mx-auto">
-          Lägg till personalen som ska schemaläggas. Varje person får individuella villkor — arbetstid, undervisningstid, fasta dagar — som appen tar hänsyn till när den föreslår scheman.
+          Lägg till personalen som ska schemaläggas. Om du redan har ett schema kan du sedan skriva in tiderna direkt här i Vecka. Om du vill ha hjälp att pussla använder du passbank, regler och generatorn.
         </p>
         <div className="flex gap-2 justify-center">
           <button onClick={onGoToStaff} className="px-5 py-2.5 rounded-lg bg-stone-800 text-white hover:bg-stone-900 transition text-sm flex items-center gap-2">
@@ -4370,7 +4659,7 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
   return (
     <div className="space-y-4">
       <TabIntro>
-        Här ser du schemat per dag och hur bemanningen ser ut över tiden. Generatorn försöker matcha passbanken, bemanningsblocken och personalens regler. <strong>Klicka på en stapel för att justera tider direkt</strong> — veckotimmarna räknas om medan du skriver, och dina manuella ändringar markeras så du kan ångra dem. Växla mellan gemensam bemanning och avdelningar för att se varje del av fritids. Om något inte går ihop visas brist- och övermaxlistor här. Knappen uppe till höger skriver ut hela veckan som PDF.
+        Här ser du schemat per dag och hur bemanningen ser ut över tiden. Du kan antingen låta generatorn pussla fram förslag eller <strong>klicka på en stapel och skriva in tider manuellt</strong> om du redan har ett schema. Veckotimmarna räknas om medan du skriver, och manuella ändringar markeras så du kan ångra dem. Växla mellan gemensam bemanning och avdelningar för att se varje del av fritids. Om något inte går ihop visas brist- och övermaxlistor här. Knappen uppe till höger skriver ut hela veckan som PDF.
       </TabIntro>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex gap-2 flex-wrap">
@@ -4725,7 +5014,7 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
   return (
     <div className="space-y-4">
       <TabIntro>
-        Lägg till och redigera personalen. Börja med reglerna och passurvalet — de styr hur generatorn pusslar. Manuell veckoredigering här är för specialfall; vanligtvis finjusterar man enklast direkt i veckovyn efteråt. Listan visar varje persons mål jämfört med faktisk arbetstid.
+        Lägg till och redigera personalen. Börja med reglerna och passurvalet — de styr hur generatorn pusslar. Manuell veckoredigering här är för specialfall; vanligtvis finjusterar man enklast direkt i veckovyn efteråt. Listan visar varje persons mål jämfört med faktisk arbetstid efter rastregeln.
       </TabIntro>
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 overflow-hidden">
         <table className="w-full text-sm">
@@ -4833,6 +5122,7 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
 }
 
 function AssignmentsView({ staff, departments, assignments, assignmentWindows, setAssignmentWindows, activeDay, setActiveDay, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, onEditAssignment }) {
+  const [staffQuery, setStaffQuery] = useState('');
   if (staff.length === 0) {
     return (
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-12 text-center">
@@ -4866,7 +5156,18 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
 
   const withShift = rows.filter(row => row.shift).length;
   const totalTasks = rows.reduce((sum, row) => sum + row.tasks.length, 0);
+  const mustCoverCount = rows.reduce((sum, row) => sum + row.tasks.filter(task => task.mustCover).length, 0);
   const issueCount = rows.reduce((sum, row) => sum + row.issues.length, 0);
+  const normalizedStaffQuery = staffQuery.trim().toLowerCase();
+  const visibleRows = (
+    normalizedStaffQuery
+      ? rows.filter(row => {
+          const dept = getDept(row.person.deptId, departments);
+          const haystack = `${row.person.name} ${row.person.role || ''} ${dept.name}`.toLowerCase();
+          return haystack.includes(normalizedStaffQuery);
+        })
+      : rows
+  );
 
   function currentFridayWeekSafe(dayKey) {
     return dayKey === 'fri' ? currentFridayWeek : 1;
@@ -4981,7 +5282,50 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+        <div className="grid grid-cols-1 lg:grid-cols-[1.35fr,1fr] gap-3 mt-4">
+          <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Snabbflöde</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <div className="rounded-lg bg-white ring-1 ring-stone-200 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-stone-400 mb-1">1</p>
+                <p className="text-sm text-stone-700">Ställ verksamhetsfönster för fritids och skoldel.</p>
+              </div>
+              <div className="rounded-lg bg-white ring-1 ring-stone-200 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-stone-400 mb-1">2</p>
+                <p className="text-sm text-stone-700">Välj dag och sök fram rätt person i listan.</p>
+              </div>
+              <div className="rounded-lg bg-white ring-1 ring-stone-200 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-stone-400 mb-1">3</p>
+                <p className="text-sm text-stone-700">Klicka <strong>Redigera</strong> och använd mallar eller kopiering.</p>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Hitta snabbare</p>
+            <input
+              className="task-input w-full"
+              value={staffQuery}
+              onChange={e => setStaffQuery(e.target.value)}
+              placeholder="Sök person, roll eller avdelning"
+            />
+            <div className="flex items-center justify-between gap-3 flex-wrap mt-2">
+              <p className="text-xs text-stone-500">
+                Visar {visibleRows.length} av {rows.length} personer.
+              </p>
+              {staffQuery && (
+                <button
+                  type="button"
+                  onClick={() => setStaffQuery('')}
+                  className="text-xs px-2 py-1 rounded-full bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition"
+                >
+                  Rensa sökning
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
           <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Pass idag</p>
             <p className="text-2xl text-stone-800 display-font">{withShift}</p>
@@ -4991,6 +5335,11 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Inlagda uppdrag</p>
             <p className="text-2xl text-stone-800 display-font">{totalTasks}</p>
             <p className="text-xs text-stone-500">färgade block i raden visar vad varje person gör under dagen</p>
+          </div>
+          <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Måste täckas</p>
+            <p className="text-2xl text-stone-800 display-font">{mustCoverCount}</p>
+            <p className="text-xs text-stone-500">uppdrag markerade som viktiga för framtida Drift</p>
           </div>
           <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Att kolla</p>
@@ -5006,12 +5355,34 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
           <div>Dagsschema</div>
           <div className="text-right">Redigera</div>
         </div>
+        <div className="px-4 py-2 border-b border-stone-100 bg-white flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-xs text-stone-500">
+            {visibleRows.length === rows.length
+              ? 'Alla personer visas i listan.'
+              : `${visibleRows.length} träffar visas i listan.`}
+          </p>
+          <div className="flex items-center gap-2 flex-wrap text-[10px] text-stone-500">
+            <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-1 ring-1 ring-teal-200 text-teal-800">
+              <span className="w-1.5 h-1.5 rounded-full bg-teal-700" />
+              Fritids
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2 py-1 ring-1 ring-slate-200 text-slate-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+              Skoldel
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 ring-1 ring-stone-200 text-stone-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-stone-700" />
+              Uppdrag
+            </span>
+          </div>
+        </div>
         <div className="divide-y divide-stone-100">
-          {rows.map(({ person, shift, tasks, issues, baseSegments }) => {
+          {visibleRows.map(({ person, shift, tasks, issues, baseSegments }) => {
             const dept = getDept(person.deptId, departments);
             const shiftStart = shift ? timeToMin(shift[0]) : null;
             const shiftEnd = shift ? timeToMin(shift[1]) : null;
             const canEditAssignments = !!shift;
+            const boundaryTasks = tasks.filter(task => assignmentIsBoundaryType(task.type));
             return (
               <div key={person.id} className="grid grid-cols-[220px,1fr,110px] gap-3 px-4 py-3 items-center hover:bg-stone-50/60">
                 <div className="min-w-0">
@@ -5021,6 +5392,23 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                     <span className="truncate">{dept.name}</span>
                     {person.role && <span className="truncate">· {person.role}</span>}
                   </div>
+                  {boundaryTasks.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {boundaryTasks.map(task => {
+                        const meta = getAssignmentTypeMeta(task.type);
+                        return (
+                          <span
+                            key={`boundary-${task.id}`}
+                            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] ring-1"
+                            style={{ backgroundColor: `${meta.color}16`, borderColor: `${meta.color}40`, color: '#44403c' }}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: meta.color }} />
+                            <span>{task.label}</span>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                   {issues.length > 0 && (
                     <p className="text-[11px] text-amber-700 mt-1 truncate">{issues[0]}</p>
                   )}
@@ -5105,6 +5493,7 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: meta.color }} />
                                 <span className="tabular-nums">{minToTime(task.start)}–{minToTime(task.end)}</span>
                                 <span>{label}</span>
+                                {assignmentIsBoundaryType(task.type) && <span>· ansvar</span>}
                               </span>
                             );
                           })}
@@ -5127,6 +5516,11 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
               </div>
             );
           })}
+          {visibleRows.length === 0 && (
+            <div className="px-4 py-8 text-center text-sm text-stone-500">
+              Ingen person matchade den här sökningen.
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -5157,11 +5551,13 @@ function DriftView({
       const tasks = getAssignmentsForDay(assignments, person.id, dayKey);
       const dept = getDept(person.deptId, departments);
       const coverTaskCount = tasks.filter(task => task.mustCover).length;
+      const boundaryTaskCount = tasks.filter(task => assignmentIsBoundaryType(task.type)).length;
       return {
         person,
         shift,
         tasks,
         coverTaskCount,
+        boundaryTaskCount,
         dept,
         isAbsent: absentSet.has(String(person.id)),
         shiftStart: shift ? timeToMin(shift[0]) : null,
@@ -5399,6 +5795,11 @@ function DriftView({
                           {row.coverTaskCount} måste täckas
                         </span>
                       )}
+                      {row.boundaryTaskCount > 0 && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] bg-sky-50 text-sky-800 ring-1 ring-sky-200">
+                          {row.boundaryTaskCount} öppning/stängning
+                        </span>
+                      )}
                       {row.tasks.length === 0 && (
                         <span className="px-2 py-0.5 rounded-full text-[10px] bg-stone-100 text-stone-600 ring-1 ring-stone-200">
                           Inga uppdrag ännu
@@ -5451,7 +5852,14 @@ function DriftView({
                     <p className="text-sm text-stone-600">Inga uppdrag med täckningskrav har fallit bort ännu.</p>
                   ) : lostCoverTasks.map(entry => (
                     <div key={`critical-${entry.person.id}-${entry.task.id}`} className="rounded-xl bg-white/80 px-3 py-2">
-                      <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>{entry.task.label}</p>
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>{entry.task.label}</p>
+                        {assignmentIsBoundaryType(entry.task.type) && (
+                          <span className={`px-2 py-1 rounded-full text-[10px] ring-1 ${entry.task.type === 'opening' ? 'bg-sky-50 text-sky-800 ring-sky-200' : 'bg-amber-50 text-amber-900 ring-amber-200'}`}>
+                            {entry.task.type === 'opening' ? 'Öppning' : 'Stängning'}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-stone-500 mt-1">
                         {entry.person.name} · {entry.dept.name} · {minToTime(entry.task.start)}–{minToTime(entry.task.end)}
                       </p>
@@ -5596,6 +6004,7 @@ function DriftView({
                               <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: meta.color }} />
                               <span className="tabular-nums">{minToTime(task.start)}–{minToTime(task.end)}</span>
                               <span>{task.label}</span>
+                              {assignmentIsBoundaryType(task.type) && <span>· ansvar</span>}
                               {task.mustCover && <span className="text-amber-700">· täck</span>}
                             </span>
                           );
@@ -5657,12 +6066,13 @@ function DriftView({
   );
 }
 
-function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, shift, tasks, previousTasks = [], onSave, onClose }) {
+function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, dayKey, shift, tasks, previousTasks = [], onSave, onClose }) {
   if (!person) return null;
   const [draftTasks, setDraftTasks] = useState(() => sortAssignments((Array.isArray(tasks) ? tasks : []).map(task => ({ ...task }))));
   const draftTasksRef = useRef(draftTasks);
   const [copyDayKeys, setCopyDayKeys] = useState([]);
   const [copyFromPersonId, setCopyFromPersonId] = useState('');
+  const [copyToPersonIds, setCopyToPersonIds] = useState([]);
   const hasShift = !!shift;
   const shiftStart = shift ? timeToMin(shift[0]) : 480;
   const shiftEnd = shift ? timeToMin(shift[1]) : 1020;
@@ -5680,6 +6090,14 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
   const copySourceTasks = useMemo(
     () => selectedCopySource ? getAssignmentsForDay(assignments, selectedCopySource.id, dayKey) : [],
     [selectedCopySource, assignments, dayKey]
+  );
+  const copyToPersonOptions = useMemo(
+    () => replacementOptions.filter(option => !!getShiftForDay(option, dayKey, {
+      fridayWeek: dayKey === 'fri' ? currentFridayWeek : 1,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    })),
+    [replacementOptions, dayKey, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]
   );
   const quickTemplates = useMemo(
     () => ASSIGNMENT_TEMPLATES.filter(template => ['lesson', 'collab', 'yard', 'break', 'pedLunch', 'resource', 'planning', 'meeting'].includes(template.type)),
@@ -5727,6 +6145,10 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
   const toggleCopyDay = (targetDayKey) => {
     setCopyDayKeys(prev => prev.includes(targetDayKey) ? prev.filter(key => key !== targetDayKey) : [...prev, targetDayKey]);
   };
+  const toggleCopyPerson = (targetPersonId) => {
+    const key = String(targetPersonId);
+    setCopyToPersonIds(prev => prev.includes(key) ? prev.filter(id => id !== key) : [...prev, key]);
+  };
 
   const addTask = (type = 'lesson', duration = 30, labelOverride = null, options = {}) => {
     if (!hasShift) return;
@@ -5746,6 +6168,44 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
     });
     setDraftTasks(prev => [item, ...prev]);
   };
+  const upsertBoundaryTask = (type) => {
+    if (!hasShift || !assignmentIsBoundaryType(type)) return;
+    const duration = Math.max(SLOT_STEP_MINUTES, Math.min(60, shiftEnd - shiftStart));
+    const isOpening = type === 'opening';
+    const start = isOpening ? shiftStart : Math.max(shiftStart, shiftEnd - duration);
+    const end = isOpening ? Math.min(shiftEnd, shiftStart + duration) : shiftEnd;
+    setDraftTasks(prev => {
+      const existing = prev.find(task => task.type === type);
+      if (existing) {
+        return sortAssignments(prev.map(task => (
+          task.id === existing.id
+            ? applyTaskPatch(task, {
+                label: inferAssignmentLabel(type),
+                mustCover: true,
+                releaseForCover: false,
+                start,
+                end,
+                durationMinutes: duration,
+              })
+            : task
+        )));
+      }
+      const item = normalizeAssignment({
+        id: createAssignmentId(),
+        type,
+        label: inferAssignmentLabel(type),
+        start,
+        end,
+        target: '',
+        notes: '',
+        mustCover: true,
+        preferredCoverPersonId: '',
+        releaseForCover: false,
+        durationMinutes: duration,
+      });
+      return item ? sortAssignments([item, ...prev]) : prev;
+    });
+  };
   const addTemplateTask = (template) => addTask(template.type, template.duration, inferAssignmentLabel(template.type), { lockDuration: true });
   const applyCopiedTasks = (sourceTasks = []) => {
     setDraftTasks((Array.isArray(sourceTasks) ? sourceTasks : []).map(task => ({
@@ -5762,7 +6222,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
     if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
-    window.setTimeout(() => onSave(draftTasksRef.current, copyDayKeys), 0);
+    window.setTimeout(() => onSave(draftTasksRef.current, copyDayKeys, copyToPersonIds), 0);
   };
 
   return (
@@ -5787,7 +6247,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
               Fyll i vad personen gör inom sitt pass. Detta påverkar inte generatorn ännu, men bygger den information som framtida Drift-läge kan använda när någon blir sjuk eller måste flyttas.
             </p>
             <p className="text-xs text-stone-500 mt-2">
-              Du behöver inte fylla varje minut. Uppdragsvyn visar redan automatisk fritidstid och skoldel utifrån verksamhetsfönstren. Använd Fritids eller Skoldel som uppdrag bara när du vill markera något uttryckligen.
+              Du behöver inte fylla varje minut. Uppdragsvyn visar redan automatisk fritidstid och skoldel utifrån verksamhetsfönstren. Använd Fritids eller Skoldel som uppdrag bara när du vill markera något uttryckligen, och markera gärna Öppning eller Stängning när det ansvaret är extra viktigt att fånga i Drift.
             </p>
           </div>
 
@@ -5806,6 +6266,16 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
               disabled={!hasShift}
               className="px-3 py-2 rounded-lg text-sm bg-slate-100 text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-slate-100">
               Lägg Skoldel
+            </button>
+            <button type="button" onClick={() => upsertBoundaryTask('opening')}
+              disabled={!hasShift}
+              className="px-3 py-2 rounded-lg text-sm bg-sky-50 text-sky-800 ring-1 ring-sky-200 hover:bg-sky-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-sky-50">
+              Markera Öppning
+            </button>
+            <button type="button" onClick={() => upsertBoundaryTask('closing')}
+              disabled={!hasShift}
+              className="px-3 py-2 rounded-lg text-sm bg-amber-50 text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-amber-50">
+              Markera Stängning
             </button>
             {prevDayKey && previousTasks.length > 0 && (
               <button type="button" onClick={() => setDraftTasks(previousTasks.map(task => ({ ...task, id: createAssignmentId() })))}
@@ -5826,7 +6296,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div>
                 <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Snabbmallar</p>
-                <p className="text-sm text-stone-600">Mallarna lägger sig i första lediga lucka inom passet och ger dig en snabb start när du bygger om läsåret.</p>
+                <p className="text-sm text-stone-600">Mallarna lägger sig i första lediga lucka inom passet och ger dig en snabb start när du bygger om läsåret. Öppning och Stängning lägger sig i stället direkt i början eller slutet av passet.</p>
               </div>
               <span className="text-xs px-2 py-1 rounded-full bg-stone-100 text-stone-600">Smart starttid inom passet</span>
             </div>
@@ -5885,7 +6355,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                   <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Kopiera dagens uppdrag</p>
-                  <p className="text-sm text-stone-600">Kopiera från igår, från en annan person eller till flera andra dagar samtidigt.</p>
+                  <p className="text-sm text-stone-600">Kopiera från igår, hämta från en kollega eller skicka vidare upplägget utan att bygga om allt för hand.</p>
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <button
@@ -5904,9 +6374,9 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
                   </button>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-[1fr,auto] gap-3 mt-3">
-                <div>
-                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Kopiera från annan person samma dag</label>
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 mt-3">
+                <div className="rounded-xl bg-white ring-1 ring-stone-200 p-3">
+                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Hämta från annan person samma dag</label>
                   <select
                     className="task-input w-full"
                     value={copyFromPersonId}
@@ -5918,43 +6388,71 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, s
                       <option key={`copy-person-${option.id}`} value={option.id}>{option.name}</option>
                     ))}
                   </select>
-                </div>
-                <div className="flex items-end">
                   <button
                     type="button"
                     disabled={!hasShift || !selectedCopySource}
                     onClick={() => applyCopiedTasks(copySourceTasks)}
-                    className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
+                    className="mt-2 px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
                   >
-                    Kopiera från person
+                    Kopiera in i denna dag
                   </button>
+                  {selectedCopySource && (
+                    <p className="text-[10px] text-stone-500 mt-2">
+                      Hämtar {copySourceTasks.length} uppdrag från {selectedCopySource.name}.
+                    </p>
+                  )}
+                </div>
+
+                <div className="rounded-xl bg-white ring-1 ring-stone-200 p-3 xl:col-span-2">
+                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Kopiera detta upplägg till annan personal samma dag</label>
+                  <p className="text-xs text-stone-500 mb-2">Välj de personer som redan har arbetspass den här dagen. Kopieringen sker när du sparar.</p>
+                  <div className="flex flex-wrap gap-2">
+                    {copyToPersonOptions.length === 0 ? (
+                      <span className="text-xs text-stone-400">Ingen annan person med pass går att kopiera till just denna dag.</span>
+                    ) : copyToPersonOptions.map(option => {
+                      const active = copyToPersonIds.includes(String(option.id));
+                      return (
+                        <button
+                          key={`copy-to-person-${option.id}`}
+                          type="button"
+                          onClick={() => toggleCopyPerson(option.id)}
+                          className={`px-3 py-1.5 rounded-full text-sm transition ${active ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'}`}
+                        >
+                          {option.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {copyToPersonIds.length > 0 && (
+                    <p className="text-[10px] text-stone-500 mt-2">
+                      {copyToPersonIds.length} personer får samma upplägg på {getDayMeta(dayKey).label.toLowerCase()} när du sparar.
+                    </p>
+                  )}
                 </div>
               </div>
-              {selectedCopySource && (
-                <p className="text-[10px] text-stone-500 mt-2">
-                  Hämtar {copySourceTasks.length} uppdrag från {selectedCopySource.name} på {getDayMeta(dayKey).label.toLowerCase()}.
-                </p>
-              )}
-              <div className="flex flex-wrap gap-2 mt-3">
-                {otherDayOptions.map(day => {
-                  const active = copyDayKeys.includes(day.key);
-                  return (
-                    <button
-                      key={day.key}
-                      type="button"
-                      onClick={() => toggleCopyDay(day.key)}
-                      className={`px-3 py-1.5 rounded-full text-sm transition ${active ? 'bg-stone-800 text-white' : 'bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100'}`}
-                    >
-                      {day.label}
-                    </button>
-                  );
-                })}
+              <div className="rounded-xl bg-white ring-1 ring-stone-200 p-3 mt-3">
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Kopiera till fler dagar för samma person</label>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {otherDayOptions.map(day => {
+                    const active = copyDayKeys.includes(day.key);
+                    return (
+                      <button
+                        key={day.key}
+                        type="button"
+                        onClick={() => toggleCopyDay(day.key)}
+                        className={`px-3 py-1.5 rounded-full text-sm transition ${active ? 'bg-stone-800 text-white' : 'bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100'}`}
+                      >
+                        {day.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {(copyDayKeys.length > 0 || copyToPersonIds.length > 0) && (
+                  <p className="text-xs text-stone-500 mt-2">
+                    Kopieringar genomförs när du klickar <span style={{ fontWeight: 500 }}>Spara uppdrag</span>.
+                  </p>
+                )}
               </div>
-              {copyDayKeys.length > 0 && (
-                <p className="text-xs text-stone-500 mt-2">
-                  Kopieras när du klickar <span style={{ fontWeight: 500 }}>Spara uppdrag</span>.
-                </p>
-              )}
             </div>
           )}
 
@@ -6605,18 +7103,25 @@ function SettingsView({ departments, setDepartments, staff, setStaff, coverageBl
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-5">
         <div className="flex items-start justify-between mb-4 gap-4 flex-wrap">
           <div>
-            <h2 className="display-font text-xl text-stone-800">Fredagsrullen</h2>
+            <h2 className="display-font text-xl text-stone-800">Fredagscykel och fredagsrull</h2>
             <p className="text-sm text-stone-500 mt-0.5 max-w-md">
               Definiera gärna en central mall här först. Sedan kan varje person välja vilken vecka i mallen som ska vara deras vecka 1, och vid behov lägga egna undantag.
             </p>
           </div>
           <div className="flex items-center gap-2 bg-stone-50 rounded-lg px-3 py-2">
-            <span className="text-xs text-stone-600">Cykellängd:</span>
+            <span className="text-xs text-stone-600">Antal veckor:</span>
             <input type="number" min="1" max="20" className="rules-input w-16 text-center"
               value={fridayCycleWeeks}
               onChange={e => setFridayCycleWeeks(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))} />
             <span className="text-xs text-stone-600">veckor</span>
           </div>
+        </div>
+
+        <div className="mb-4 rounded-xl bg-amber-50 ring-1 ring-amber-200 p-4">
+          <p className="text-xs uppercase tracking-wider text-amber-700 mb-1">Här ställer du fredagscykeln</p>
+          <p className="text-sm text-stone-700">
+            Om ni till exempel har en rull på <strong>8 veckor</strong> är det här du anger det. Den här siffran styr hela fredagsrullen för personal som använder <strong>Rull</strong>.
+          </p>
         </div>
 
         <div className="mb-5">
@@ -7898,80 +8403,76 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 // -------- Welcome Modal & Tour --------
 
-function WelcomeModal({ onClose, onStartTour }) {
-  const STEPS = [
-    { num: '1', title: 'Lägg till avdelningar', desc: 'Vad heter era avdelningar? Färgkoda dem så ni ser dem tydligt.' },
-    { num: '2', title: 'Lägg till pass och personal', desc: 'Börja gärna med passbanken. Fyll sedan i avdelning, tjänstgöring, tillåtna pass, fredagsrutin och villkor för varje person.' },
-    { num: '3', title: 'Lägg på uppdrag', desc: 'När grundpassen sitter kan du först ställa in verksamhetsfönstren för fritids/skoldel och sedan fylla dagen med lektioner, rastvärd, samverkan, raster och andra bundna uppdrag i Uppdrag-fliken.' },
-    { num: '4', title: 'Använd Drift vid frånvaro', desc: 'När grundschemat och uppdragen sitter kan du i Drift markera dagens frånvaro och se vad som faller bort, vad som måste täckas och om bemanningen börjar spricka.' },
-    { num: '5', title: 'Justera bemanningskrav', desc: 'Lägg gemensamma block och avdelningsblock så appen vet hur bemanningen ska se ut över dagen. Använd min/max om du vill styra t.ex. exakt en öppnare.' },
-    { num: '6', title: 'Generera, finjustera, dela', desc: 'Appen pusslar fram tre alternativ. Välj det som känns bäst — klicka sedan på en stapel i veckovyn för att justera tider direkt (timmarna räknas om medan du skriver). Skriv ut som PDF när du är nöjd.' },
-  ];
+function WelcomeModal({ onClose, onStartTour, onApplyMode, currentMode }) {
+  const [selectedMode, setSelectedMode] = useState(normalizeWorkflowMode(currentMode));
+  const selectedMeta = getWorkflowModeMeta(selectedMode);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28, 25, 23, 0.5)' }}>
-      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full overflow-hidden">
         <div className="px-6 py-5 border-b border-stone-200">
           <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Välkommen till SchemaFIX</p>
-          <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>Så här kommer du igång</h2>
-          <p className="text-sm text-stone-600 mt-2">Sex lugna steg för att bygga upp planering, uppdrag och dagens driftläge.</p>
+          <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>Välj hur du vill arbeta</h2>
+          <p className="text-sm text-stone-600 mt-2">Du kan antingen låta appen hjälpa dig pussla schema eller använda den ovanpå ett befintligt schema. Det går att byta senare.</p>
         </div>
-        <div className="px-6 py-5 space-y-3">
-          {STEPS.map((s) => (
-            <div key={s.num} className="flex gap-3">
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-stone-800 text-white flex items-center justify-center display-font text-sm">
-                {s.num}
-              </div>
-              <div className="pt-0.5">
-                <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>{s.title}</p>
-                <p className="text-xs text-stone-600 mt-0.5">{s.desc}</p>
-              </div>
+        <div className="px-6 py-5 space-y-4">
+          <div className="grid md:grid-cols-2 gap-3">
+            {[WORKFLOW_MODE_GENERATE, WORKFLOW_MODE_EXISTING].map(mode => {
+              const meta = getWorkflowModeMeta(mode);
+              const active = selectedMode === mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setSelectedMode(mode)}
+                  className={`text-left rounded-2xl p-4 transition ring-1 ${active ? 'bg-stone-800 text-white ring-stone-800 shadow-lg' : 'bg-stone-50 text-stone-800 ring-stone-200 hover:bg-stone-100'}`}
+                >
+                  <p className={`text-[10px] uppercase tracking-wider ${active ? 'text-stone-300' : 'text-stone-500'}`}>Arbetssätt</p>
+                  <h3 className={`display-font text-xl mt-1 ${active ? 'text-white' : 'text-stone-800'}`}>{meta.shortLabel}</h3>
+                  <p className={`text-sm mt-2 leading-relaxed ${active ? 'text-stone-200' : 'text-stone-600'}`}>{meta.description}</p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="rounded-2xl bg-stone-50 ring-1 ring-stone-200 p-4">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Detta läge hjälper dig att:</p>
+            <div className="grid md:grid-cols-3 gap-2">
+              {selectedMeta.steps.map((step, idx) => (
+                <div key={`${selectedMeta.id}-welcome-step-${idx}`} className="rounded-lg bg-white ring-1 ring-stone-200 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wider text-stone-400 mb-1">{idx + 1}</p>
+                  <p className="text-sm text-stone-700">{step}</p>
+                </div>
+              ))}
             </div>
-          ))}
+            <p className="text-xs text-stone-500 mt-3">Du får också hjälpbubblor över flikarna och en kort guide om du vill.</p>
+          </div>
         </div>
         <div className="px-6 py-4 border-t border-stone-200 bg-stone-50 flex gap-2 justify-between flex-wrap">
-          <button onClick={onClose}
+          <button onClick={() => { onApplyMode(selectedMode); onClose(); }}
             className="px-4 py-2 text-sm rounded-lg text-stone-600 hover:bg-stone-100 transition">
-            Hoppa över
+            Fortsätt utan guide
           </button>
-          <button onClick={onStartTour}
-            className="px-5 py-2 text-sm rounded-lg bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2">
-            Visa mig hur <ArrowRight size={14} />
-          </button>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={onClose}
+              className="px-4 py-2 text-sm rounded-lg text-stone-600 hover:bg-stone-100 transition">
+              Stäng
+            </button>
+            <button onClick={() => onStartTour(selectedMode)}
+              className="px-5 py-2 text-sm rounded-lg bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2">
+              Visa guide för detta läge <ArrowRight size={14} />
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function TourBubble({ step, onNext, onClose }) {
-  const STEPS = [
-    {
-      title: 'Steg 1 av 6 · Avdelningar',
-      desc: 'Här definierar du avdelningarna på fritidshemmet. Klicka "Lägg till avdelning" om ni har flera, eller döp om den befintliga. Färgen används för att markera personal i schemavyn.',
-    },
-    {
-      title: 'Steg 2 av 6 · Personal',
-      desc: 'Lägg först in passbanken under Inställningar, och lägg sedan till en kollega i taget. Börja med avdelning, tjänstgöring, tillåtna pass och villkor som "måste börja senast 08:40 för lektion". Manuell veckoredigering här är för specialfall — vanligtvis finjusterar man enklast direkt i veckovyn efteråt.',
-    },
-    {
-      title: 'Steg 3 av 6 · Uppdrag',
-      desc: 'När grundschemat finns kan du först tala om när dagen räknas som fritidsdel respektive skoldel och sedan lägga på lektion, rastvärd, samverkan, raster eller andra bundna uppdrag. Detta stör inte generatorn, men bygger underlag för framtida Drift-läge.',
-    },
-    {
-      title: 'Steg 4 av 6 · Drift',
-      desc: 'I Drift markerar du dagens frånvaro utan att skriva om grundschemat. Där ser du vad som faller bort, vilka uppdrag som måste täckas och om bemanningen börjar spricka.',
-    },
-    {
-      title: 'Steg 5 av 6 · Bemanningskrav',
-      desc: 'Hur många personer behöver vara på plats vid olika tider? Här definierar du tidsblock med min och max, antingen gemensamt eller per avdelning. Använd gemensamma block när alla är sammanslagna och avdelningsblock när fritids startar olika tider.',
-    },
-    {
-      title: 'Steg 6 av 6 · Vecka & Generera',
-      desc: 'Här ser du schemat per dag och täckning över tiden. Tryck på "Generera schemaförslag" för att låta appen pussla fram tre alternativ. Klicka på en stapel för att justera tider direkt — veckotimmarna räknas om medan du skriver. Manuella ändringar markeras med en stjärna så du kan ångra dem individuellt. Skriv ut som PDF när du är nöjd.',
-    },
-  ];
-  const cur = STEPS[step];
-  const isLast = step === STEPS.length - 1;
+function TourBubble({ step, mode, onNext, onClose }) {
+  const steps = getWorkflowTour(mode);
+  const cur = steps[step];
+  const isLast = step === steps.length - 1;
+  if (!cur) return null;
   return (
     <div className="fixed bottom-6 right-6 z-50 max-w-sm">
       <div className="bg-stone-800 text-white rounded-2xl shadow-2xl p-5">
@@ -7984,7 +8485,7 @@ function TourBubble({ step, onNext, onClose }) {
         <p className="text-sm text-stone-300 mb-4 leading-relaxed">{cur.desc}</p>
         <div className="flex items-center justify-between gap-2">
           <div className="flex gap-1">
-            {STEPS.map((_, i) => (
+            {steps.map((_, i) => (
               <span key={i} className={`w-1.5 h-1.5 rounded-full ${i === step ? 'bg-white' : 'bg-stone-600'}`} />
             ))}
           </div>
