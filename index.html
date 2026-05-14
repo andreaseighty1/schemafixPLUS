@@ -282,6 +282,20 @@ function inferAssignmentLabel(typeId) {
 function assignmentRequiresCoverByDefault(typeId) {
   return !['break', 'pedLunch'].includes(typeId);
 }
+function assignmentCanReleaseByDefault(typeId) {
+  return ['resource', 'planning'].includes(typeId);
+}
+function assignmentCountsAsBreak(task) {
+  return ['break', 'pedLunch'].includes(task?.type);
+}
+function normalizeComparableText(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function assignmentsShareTarget(a, b) {
+  const aTarget = normalizeComparableText(a?.target);
+  const bTarget = normalizeComparableText(b?.target);
+  return !!aTarget && aTarget === bTarget;
+}
 
 function getPassTypeLabel(passType) {
   return PASS_TYPES.find(type => type.id === passType)?.label || 'Pass';
@@ -895,7 +909,7 @@ function normalizeAllowedPassIds(allowedPassIds) {
 function normalizeAllowedPassTypes(allowedPassTypes) {
   return Array.from(new Set((Array.isArray(allowedPassTypes) ? allowedPassTypes : []).filter(type => PASS_TYPE_IDS.includes(type))));
 }
-function normalizeAssignment(item) {
+function normalizeAssignment(item, options = {}) {
   if (!item || typeof item !== 'object') return null;
   const start = clamp(roundToStep(asNumber(item.start, 480)), 0, 24 * 60);
   const end = clamp(roundToStep(asNumber(item.end, start + SLOT_STEP_MINUTES)), start + SLOT_STEP_MINUTES, 24 * 60);
@@ -904,6 +918,14 @@ function normalizeAssignment(item) {
   const rawLabel = item.label == null ? '' : String(item.label);
   const rawTarget = item.target == null ? '' : String(item.target);
   const rawNotes = item.notes == null ? '' : String(item.notes);
+  const rawPreferredCoverPersonId = item.preferredCoverPersonId == null ? '' : String(item.preferredCoverPersonId).trim();
+  const allowedStaffIds = options.allowedStaffIds instanceof Set ? options.allowedStaffIds : null;
+  const ownerId = options.ownerId == null ? '' : String(options.ownerId);
+  const preferredCoverPersonId = rawPreferredCoverPersonId
+    && rawPreferredCoverPersonId !== ownerId
+    && (!allowedStaffIds || allowedStaffIds.has(rawPreferredCoverPersonId))
+      ? rawPreferredCoverPersonId
+      : '';
   return {
     id: item.id || createAssignmentId(),
     type,
@@ -913,6 +935,8 @@ function normalizeAssignment(item) {
     target: rawTarget,
     notes: rawNotes,
     mustCover: !!item.mustCover,
+    preferredCoverPersonId,
+    releaseForCover: item.releaseForCover == null ? assignmentCanReleaseByDefault(type) : !!item.releaseForCover,
   };
 }
 function sortAssignments(list = []) {
@@ -931,7 +955,9 @@ function normalizeAssignmentsMap(assignments, staff = []) {
     if (!dayMap || typeof dayMap !== 'object') return;
     const normalizedDayMap = {};
     ALL_DAY_KEYS.forEach(dayKey => {
-      const list = Array.isArray(dayMap[dayKey]) ? dayMap[dayKey].map(normalizeAssignment).filter(Boolean) : [];
+      const list = Array.isArray(dayMap[dayKey])
+        ? dayMap[dayKey].map(item => normalizeAssignment(item, { allowedStaffIds: allowedIds, ownerId: personId })).filter(Boolean)
+        : [];
       if (list.length > 0) normalizedDayMap[dayKey] = sortAssignments(list);
     });
     if (Object.keys(normalizedDayMap).length > 0) result[String(personId)] = normalizedDayMap;
@@ -1050,9 +1076,12 @@ function getBaseActivitySegments(person, shift, assignmentWindows) {
   if (cursor < shiftEnd) segments.push({ kind: 'school', label: 'Skoldel', start: cursor, end: shiftEnd });
   return segments.filter(segment => segment.end > segment.start);
 }
-function replaceAssignmentsForDay(assignments, personId, dayKey, nextList) {
+function replaceAssignmentsForDay(assignments, personId, dayKey, nextList, staff = []) {
   const key = String(personId);
-  const normalized = sortAssignments((Array.isArray(nextList) ? nextList : []).map(normalizeAssignment).filter(Boolean));
+  const allowedStaffIds = new Set((Array.isArray(staff) ? staff : []).map(person => String(person.id)));
+  const normalized = sortAssignments((Array.isArray(nextList) ? nextList : [])
+    .map(item => normalizeAssignment(item, { allowedStaffIds, ownerId: key }))
+    .filter(Boolean));
   const next = { ...(assignments || {}) };
   const personMap = { ...(next[key] || {}) };
   if (normalized.length > 0) personMap[dayKey] = normalized;
@@ -1097,10 +1126,10 @@ function findSuggestedAssignmentWindow(tasks, shiftStart, shiftEnd, duration = 3
   const fallbackEnd = clamp(fallbackStart + safeDuration, fallbackStart + SLOT_STEP_MINUTES, shiftEnd);
   return { start: fallbackStart, end: fallbackEnd };
 }
-function buildCoverageIssuesForDay(staff, dayKey, coverageScopes) {
+function buildCoverageIssuesForDay(staff, dayKey, coverageScopes, options = {}) {
   const issues = [];
   (coverageScopes || []).forEach(scope => {
-    const slots = computeSlots(staff, dayKey, scope.slots || [], scope);
+    const slots = computeSlots(staff, dayKey, scope.slots || [], scope, options);
     let active = null;
     const flush = () => {
       if (active) issues.push(active);
@@ -1154,7 +1183,97 @@ function buildCoverageIssuesForDay(staff, dayKey, coverageScopes) {
   });
   return issues;
 }
-function buildReplacementCandidates(staff, assignments, dayKey, intervalStart, intervalEnd, absentIds = [], owner = null, options = {}) {
+function buildCandidateBreakStatus(shift, tasks, intervalStart, intervalEnd, overlapping = []) {
+  if (!shift) return { hasThirtyMinuteBreak: false, label: 'Ingen rastbedömning ännu' };
+  const shiftStart = timeToMin(shift[0]);
+  const shiftEnd = timeToMin(shift[1]);
+  const overlappingIds = new Set((Array.isArray(overlapping) ? overlapping : []).map(task => String(task.id)));
+  const remainingTasks = sortAssignments((Array.isArray(tasks) ? tasks : []).filter(task => !overlappingIds.has(String(task.id))));
+  const explicitBreakWindows = remainingTasks
+    .filter(task => assignmentCountsAsBreak(task) && (task.end - task.start) >= 30)
+    .map(task => ({ start: task.start, end: task.end, source: 'plannedBreak' }));
+  const busyIntervals = mergeIntervals([
+    ...remainingTasks
+      .filter(task => !assignmentCountsAsBreak(task))
+      .map(task => ({ start: task.start, end: task.end })),
+    { start: intervalStart, end: intervalEnd },
+  ]);
+  const openWindows = [];
+  let cursor = shiftStart;
+  busyIntervals.forEach(interval => {
+    if (interval.start > cursor) {
+      openWindows.push({ start: cursor, end: interval.start, source: 'gap' });
+    }
+    cursor = Math.max(cursor, interval.end);
+  });
+  if (cursor < shiftEnd) openWindows.push({ start: cursor, end: shiftEnd, source: 'gap' });
+
+  const windows = [...explicitBreakWindows, ...openWindows]
+    .filter(window => (window.end - window.start) >= 30)
+    .sort((a, b) => {
+      if (a.source !== b.source) return a.source === 'plannedBreak' ? -1 : 1;
+      return a.start - b.start;
+    });
+  if (windows.length === 0) {
+    return { hasThirtyMinuteBreak: false, label: 'Ingen tydlig 30 min rast kvar' };
+  }
+  const best = windows[0];
+  const suggestedEnd = Math.min(best.end, best.start + 30);
+  return {
+    hasThirtyMinuteBreak: true,
+    start: best.start,
+    end: suggestedEnd,
+    source: best.source,
+    label: `${best.source === 'plannedBreak' ? 'Behåller rast' : 'Möjlig rast'} ${minToTime(best.start)}–${minToTime(suggestedEnd)}`,
+  };
+}
+function buildReplacementInsights(candidate, coverTask = null, owner = null) {
+  let score = 0;
+  const reasons = [];
+  const preferredCoverMatch = !!coverTask?.preferredCoverPersonId && String(coverTask.preferredCoverPersonId) === String(candidate.person.id);
+  const releasableOverlapping = candidate.overlapping.filter(task => task.releaseForCover);
+  const blockingOverlapping = candidate.overlapping.filter(task => !task.releaseForCover);
+  const sameTargetReleasable = coverTask
+    ? releasableOverlapping.find(task => assignmentsShareTarget(task, coverTask))
+    : null;
+
+  if (preferredCoverMatch) {
+    score += 320;
+    reasons.push('är vald som förstahandsersättare');
+  }
+  if (candidate.overlapping.length === 0) {
+    score += 110;
+    reasons.push('är helt fri i tidsfönstret');
+  }
+  if (sameTargetReleasable) {
+    score += 220;
+    reasons.push(`är ${getAssignmentTypeMeta(sameTargetReleasable.type).label.toLowerCase()} på samma mål`);
+  } else if (releasableOverlapping.some(task => task.type === 'resource')) {
+    score += 120;
+    reasons.push('är resurs som kan släppas');
+  } else if (releasableOverlapping.length > 0) {
+    score += 70;
+    reasons.push('har flyttbart uppdrag i tidsfönstret');
+  }
+  if (owner && candidate.person.deptId === owner.deptId) {
+    score += 45;
+    reasons.push('jobbar på samma avdelning');
+  }
+  if (blockingOverlapping.length > 0) {
+    score -= blockingOverlapping.length * 150;
+    reasons.push(`krockar med ${blockingOverlapping[0].label}`);
+  }
+  score -= candidate.overlapping.length * 10;
+
+  return {
+    score,
+    reasons: reasons.slice(0, 3),
+    preferredCoverMatch,
+    releasableOverlapping,
+    blockingOverlapping,
+  };
+}
+function buildReplacementCandidates(staff, assignments, dayKey, intervalStart, intervalEnd, absentIds = [], owner = null, coverTask = null, options = {}) {
   const absentSet = new Set((Array.isArray(absentIds) ? absentIds : []).map(id => String(id)));
   const candidates = (Array.isArray(staff) ? staff : []).map(person => {
     if (absentSet.has(String(person.id))) return null;
@@ -1164,21 +1283,35 @@ function buildReplacementCandidates(staff, assignments, dayKey, intervalStart, i
     const shiftStart = timeToMin(shift[0]);
     const shiftEnd = timeToMin(shift[1]);
     if (shiftStart > intervalStart || shiftEnd < intervalEnd) return null;
-    const overlapping = getAssignmentsForDay(assignments, person.id, dayKey)
+    const dayTasks = getAssignmentsForDay(assignments, person.id, dayKey);
+    const overlapping = dayTasks
       .filter(task => intervalsOverlap(task.start, task.end, intervalStart, intervalEnd));
-    return {
+    const insights = buildReplacementInsights({
       person,
       shift,
       overlapping,
       sameDept: !!owner && person.deptId === owner.deptId,
+    }, coverTask, owner);
+    return {
+      person,
+      shift,
+      dayTasks,
+      overlapping,
+      sameDept: !!owner && person.deptId === owner.deptId,
+      score: insights.score,
+      reasons: insights.reasons,
+      preferredCoverMatch: insights.preferredCoverMatch,
+      releasableOverlapping: insights.releasableOverlapping,
+      blockingOverlapping: insights.blockingOverlapping,
+      breakStatus: buildCandidateBreakStatus(shift, dayTasks, intervalStart, intervalEnd, overlapping),
     };
   }).filter(Boolean).sort((a, b) => {
+    if (a.score !== b.score) return b.score - a.score;
     if ((a.overlapping.length === 0) !== (b.overlapping.length === 0)) return a.overlapping.length - b.overlapping.length;
-    if (a.sameDept !== b.sameDept) return a.sameDept ? -1 : 1;
-    if (a.overlapping.length !== b.overlapping.length) return a.overlapping.length - b.overlapping.length;
     return a.person.name.localeCompare(b.person.name, 'sv');
   });
   return {
+    best: candidates[0] || null,
     free: candidates.filter(candidate => candidate.overlapping.length === 0),
     busy: candidates.filter(candidate => candidate.overlapping.length > 0),
   };
@@ -2579,23 +2712,25 @@ function FritidsSchemaApp() {
         if (raw) {
           foundData = true;
           const data = JSON.parse(raw);
+          const normalizedStaff = normalizeStaffList(data.staff || [], data.fridayCycleWeeks || 8);
           if (data.staff) {
-          const normalizedStaff = normalizeStaffList(data.staff, data.fridayCycleWeeks || 8);
-          setStaff(normalizedStaff);
-          if (normalizedStaff.length > 0) nextId = Math.max(...normalizedStaff.map(p => p.id), 99) + 1;
+            setStaff(normalizedStaff);
+            if (normalizedStaff.length > 0) nextId = Math.max(...normalizedStaff.map(p => p.id), 99) + 1;
+          }
+          const loadedDepartments = data.departments || initialDepartments;
+          if (data.departments) setDepartments(loadedDepartments);
+          if (data.coverageBlocks) setCoverageBlocks(normalizeCoverageBlocks(data.coverageBlocks, loadedDepartments));
+          setPassBank(normalizePassBank(data.passBank || initialPassBank));
+          setAssignments(normalizeAssignmentsMap(data.assignments || initialAssignments, normalizedStaff));
+          setAssignmentWindows(normalizeAssignmentWindows(data.assignmentWindows || initialAssignmentWindows, loadedDepartments, normalizeCoverageBlocks(data.coverageBlocks || initialCoverageBlocks, loadedDepartments)));
+          setDriftState(normalizeDriftState(data.driftState || initialDriftState, normalizedStaff));
+          if (data.fridayCycleWeeks) setFridayCycleWeeksRaw(data.fridayCycleWeeks);
+          setFridayTemplateRotation(resizeRotation(data.fridayTemplateRotation, data.fridayCycleWeeks || 8));
+          if (data.savedFileName) setSavedFileName(data.savedFileName);
         }
-        const loadedDepartments = data.departments || initialDepartments;
-        if (data.departments) setDepartments(loadedDepartments);
-        if (data.coverageBlocks) setCoverageBlocks(normalizeCoverageBlocks(data.coverageBlocks, loadedDepartments));
-        setPassBank(normalizePassBank(data.passBank || initialPassBank));
-        setAssignments(normalizeAssignmentsMap(data.assignments || initialAssignments, normalizedStaff));
-        setAssignmentWindows(normalizeAssignmentWindows(data.assignmentWindows || initialAssignmentWindows, loadedDepartments, normalizeCoverageBlocks(data.coverageBlocks || initialCoverageBlocks, loadedDepartments)));
-        setDriftState(normalizeDriftState(data.driftState || initialDriftState, normalizedStaff));
-        if (data.fridayCycleWeeks) setFridayCycleWeeksRaw(data.fridayCycleWeeks);
-        setFridayTemplateRotation(resizeRotation(data.fridayTemplateRotation, data.fridayCycleWeeks || 8));
-        if (data.savedFileName) setSavedFileName(data.savedFileName);
-      }
-    } catch {}
+    } catch (err) {
+      console.error('Kunde inte läsa backup från localStorage:', err);
+    }
     // Visa välkomstvyn endast vid allra första besöket — tom localStorage
     const hasSeenWelcome = localStorage.getItem('schemafix-welcome-seen');
     if (!foundData && !hasSeenWelcome) {
@@ -2830,13 +2965,13 @@ function FritidsSchemaApp() {
   const openAssignmentEditor = (personId, dayKey) => setAssignmentEditor({ personId, dayKey });
   const saveAssignmentsForDay = (personId, dayKey, nextList, copyDayKeys = []) => {
     setAssignments(prev => {
-      let next = replaceAssignmentsForDay(prev, personId, dayKey, nextList);
+      let next = replaceAssignmentsForDay(prev, personId, dayKey, nextList, staff);
       (Array.isArray(copyDayKeys) ? copyDayKeys : []).forEach(copyDayKey => {
         const clonedList = (Array.isArray(nextList) ? nextList : []).map(task => ({
           ...task,
           id: createAssignmentId(),
         }));
-        next = replaceAssignmentsForDay(next, personId, copyDayKey, clonedList);
+        next = replaceAssignmentsForDay(next, personId, copyDayKey, clonedList, staff);
       });
       return next;
     });
@@ -3186,7 +3321,7 @@ function FritidsSchemaApp() {
               <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Fritidshem · schemaverktyg</p>
               <h1 className="display-font text-4xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>SchemaFIX</h1>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <p className="text-stone-600 text-sm">Prototyp v32 · tydligare driftöversikt</p>
+              <p className="text-stone-600 text-sm">Prototyp v35 · säkrare uppdragssparning</p>
                 {dirty && (
                   <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
                     <Circle size={6} fill="currentColor" />
@@ -3334,6 +3469,7 @@ function FritidsSchemaApp() {
         <AssignmentEditorModal
           key={`${assignmentEditor.personId}-${assignmentEditor.dayKey}`}
           person={staff.find(s => s.id === assignmentEditor.personId)}
+          staff={staff}
           dayKey={assignmentEditor.dayKey}
           shift={getShiftForDay(staff.find(s => s.id === assignmentEditor.personId) || {}, assignmentEditor.dayKey, {
             fridayWeek: currentFridayWeek,
@@ -4862,6 +4998,7 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
             const dept = getDept(person.deptId, departments);
             const shiftStart = shift ? timeToMin(shift[0]) : null;
             const shiftEnd = shift ? timeToMin(shift[1]) : null;
+            const canEditAssignments = !!shift;
             return (
               <div key={person.id} className="grid grid-cols-[220px,1fr,110px] gap-3 px-4 py-3 items-center hover:bg-stone-50/60">
                 <div className="min-w-0">
@@ -4965,9 +5102,13 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                 </div>
 
                 <div className="text-right">
-                  <button type="button" onClick={() => onEditAssignment(person.id, activeDay)}
-                    className="inline-flex items-center gap-1.5 text-sm text-stone-700 hover:text-stone-900 px-3 py-2 rounded-lg bg-stone-100 hover:bg-stone-200 transition">
-                    <Edit3 size={13} />Redigera
+                  <button
+                    type="button"
+                    onClick={() => canEditAssignments && onEditAssignment(person.id, activeDay)}
+                    disabled={!canEditAssignments}
+                    className="inline-flex items-center gap-1.5 text-sm text-stone-700 hover:text-stone-900 px-3 py-2 rounded-lg bg-stone-100 hover:bg-stone-200 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-stone-100 disabled:hover:text-stone-700"
+                  >
+                    <Edit3 size={13} />{canEditAssignments ? 'Redigera' : 'Inget pass'}
                   </button>
                 </div>
               </div>
@@ -5032,11 +5173,12 @@ function DriftView({
   const onShiftRows = rows.filter(row => row.shift);
   const visibleOnShiftRows = filteredRows.filter(row => row.shift);
   const visibleOffShiftRows = filteredRows.filter(row => !row.shift);
-  const absentRows = rows.filter(row => row.isAbsent);
+  const absentRows = rows.filter(row => row.isAbsent && row.shift);
+  const staleAbsentRows = rows.filter(row => row.isAbsent && !row.shift);
   const availableStaff = staff.filter(person => !absentSet.has(String(person.id)));
   const coverageIssues = useMemo(
-    () => buildCoverageIssuesForDay(availableStaff, dayKey, coverageScopes),
-    [availableStaff, dayKey, coverageScopes]
+    () => buildCoverageIssuesForDay(availableStaff, dayKey, coverageScopes, fridayOptions),
+    [availableStaff, dayKey, coverageScopes, fridayOptions]
   );
   const gapIssues = coverageIssues.filter(issue => issue.kind === 'gap');
   const overIssues = coverageIssues.filter(issue => issue.kind === 'over');
@@ -5055,6 +5197,7 @@ function DriftView({
           task.end,
           absentIds,
           row.person,
+          task,
           fridayOptions
         ),
       }))),
@@ -5147,7 +5290,7 @@ function DriftView({
           </div>
           <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Frånvarande</p>
-            <p className={`text-2xl display-font ${absentRows.length > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>{absentRows.length}</p>
+            <p className={`text-2xl display-font ${(absentRows.length + staleAbsentRows.length) > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>{absentRows.length + staleAbsentRows.length}</p>
             <p className="text-xs text-stone-500">markeras bara här i Drift, inte i grundschemat</p>
           </div>
           <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
@@ -5170,7 +5313,7 @@ function DriftView({
               <h2 className="display-font text-xl text-stone-800">All personal idag</h2>
               <p className="text-sm text-stone-500 mt-0.5">Här väljer du frånvaro. Alla syns, även de som inte har arbetspass den här dagen.</p>
             </div>
-            {absentRows.length > 0 && (
+            {(absentRows.length + staleAbsentRows.length) > 0 && (
               <button
                 type="button"
                 onClick={clearAbsences}
@@ -5193,8 +5336,17 @@ function DriftView({
           <div className="flex flex-wrap gap-2 mt-3">
             <span className="px-2 py-1 rounded-full text-xs bg-stone-100 text-stone-700">{rows.length} personer totalt</span>
             <span className="px-2 py-1 rounded-full text-xs bg-stone-100 text-stone-700">{onShiftRows.length} på pass</span>
-            <span className="px-2 py-1 rounded-full text-xs bg-amber-100 text-amber-800">{absentRows.length} frånvarande</span>
+            <span className="px-2 py-1 rounded-full text-xs bg-amber-100 text-amber-800">{absentRows.length + staleAbsentRows.length} frånvarande</span>
           </div>
+
+          {staleAbsentRows.length > 0 && (
+            <div className="mt-4 rounded-xl bg-amber-50 ring-1 ring-amber-200 p-3">
+              <p className="text-xs uppercase tracking-wider text-amber-700 mb-1">Att kolla</p>
+              <p className="text-sm text-stone-700">
+                {staleAbsentRows.length} markerad{staleAbsentRows.length === 1 ? '' : 'e'} frånvaro{staleAbsentRows.length === 1 ? '' : 'r'} ligger på personer utan pass den här dagen. De ignoreras i driftanalysen tills du rensar frånvaron.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-4 mt-4 max-h-[72vh] overflow-y-auto pr-1">
             <div>
@@ -5290,10 +5442,23 @@ function DriftView({
                       <p className="text-xs text-stone-500 mt-1">
                         {entry.person.name} · {entry.dept.name} · {minToTime(entry.task.start)}–{minToTime(entry.task.end)}
                       </p>
-                      {entry.candidates.free.length > 0 ? (
-                        <p className="text-xs text-emerald-800 mt-2">Första fria: {entry.candidates.free.slice(0, 2).map(candidate => candidate.person.name).join(', ')}</p>
+                      {entry.candidates.best ? (
+                        <div className="mt-2">
+                          <p className="text-xs text-emerald-800">
+                            Bästa träff: {entry.candidates.best.person.name}
+                            {entry.candidates.best.overlapping.length === 0 ? ' · fri nu' : ' · kräver omflyttning'}
+                          </p>
+                          {entry.candidates.best.reasons.length > 0 && (
+                            <p className="text-xs text-stone-600 mt-1">{entry.candidates.best.reasons.join(' · ')}</p>
+                          )}
+                          {entry.candidates.best.breakStatus?.label && (
+                            <p className={`text-xs mt-1 ${entry.candidates.best.breakStatus.hasThirtyMinuteBreak ? 'text-stone-500' : 'text-amber-700'}`}>
+                              {entry.candidates.best.breakStatus.label}
+                            </p>
+                          )}
+                        </div>
                       ) : (
-                        <p className="text-xs text-amber-800 mt-2">Ingen helt fri kandidat hittad ännu.</p>
+                        <p className="text-xs text-amber-800 mt-2">Ingen tydlig kandidat hittad ännu.</p>
                       )}
                     </div>
                   ))}
@@ -5319,7 +5484,7 @@ function DriftView({
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4">
               <h2 className="display-font text-xl text-stone-800">Förslag på ersättare</h2>
-              <p className="text-sm text-stone-500 mt-0.5">Första versionen sorterar främst på fria personer inom samma tidsfönster och visar sedan sådana som är på plats men redan bokade.</p>
+              <p className="text-sm text-stone-500 mt-0.5">Drift väger nu in fria luckor, förstahandsersättare, resursuppdrag som kan släppas och om en möjlig 30-minutersrast fortfarande finns kvar.</p>
               <div className="space-y-3 mt-4">
                 {lostCoverTasks.length === 0 ? (
                   <div className="rounded-2xl bg-emerald-50 ring-1 ring-emerald-200 p-5 text-sm text-emerald-800">
@@ -5337,6 +5502,22 @@ function DriftView({
                       </div>
                       <span className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800">Behöver täckas</span>
                     </div>
+                    {entry.candidates.best && (
+                      <div className="mt-3 rounded-xl bg-white px-3 py-3 ring-1 ring-stone-200">
+                        <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">Smartast först</p>
+                        <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>
+                          {entry.candidates.best.person.name} · {entry.candidates.best.shift[0]}–{entry.candidates.best.shift[1]}
+                        </p>
+                        {entry.candidates.best.reasons.length > 0 && (
+                          <p className="text-xs text-stone-600 mt-1">{entry.candidates.best.reasons.join(' · ')}</p>
+                        )}
+                        {entry.candidates.best.breakStatus?.label && (
+                          <p className={`text-xs mt-1 ${entry.candidates.best.breakStatus.hasThirtyMinuteBreak ? 'text-stone-500' : 'text-amber-700'}`}>
+                            {entry.candidates.best.breakStatus.label}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     {entry.candidates.free.length > 0 ? (
                       <div className="mt-3">
                         <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-2">Fria kandidater</p>
@@ -5345,6 +5526,7 @@ function DriftView({
                             <span key={`free-${entry.task.id}-${candidate.person.id}`} className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200">
                               <span>{candidate.person.name}</span>
                               <span>{candidate.shift[0]}–{candidate.shift[1]}</span>
+                              {candidate.preferredCoverMatch && <span>· förstaval</span>}
                               {candidate.sameDept && <span>· samma avd.</span>}
                             </span>
                           ))}
@@ -5360,7 +5542,7 @@ function DriftView({
                           {entry.candidates.busy.slice(0, 4).map(candidate => (
                             <span key={`busy-${entry.task.id}-${candidate.person.id}`} className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] bg-stone-100 text-stone-700 ring-1 ring-stone-200">
                               <span>{candidate.person.name}</span>
-                              <span>{candidate.overlapping[0]?.label || 'krockar'}</span>
+                              <span>{candidate.reasons[0] || candidate.overlapping[0]?.label || 'krockar'}</span>
                             </span>
                           ))}
                         </div>
@@ -5462,16 +5644,24 @@ function DriftView({
   );
 }
 
-function AssignmentEditorModal({ person, dayKey, shift, tasks, previousTasks = [], onSave, onClose }) {
+function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previousTasks = [], onSave, onClose }) {
   if (!person) return null;
   const [draftTasks, setDraftTasks] = useState(() => sortAssignments((Array.isArray(tasks) ? tasks : []).map(task => ({ ...task }))));
   const draftTasksRef = useRef(draftTasks);
   const [copyDayKeys, setCopyDayKeys] = useState([]);
+  const hasShift = !!shift;
   const shiftStart = shift ? timeToMin(shift[0]) : 480;
   const shiftEnd = shift ? timeToMin(shift[1]) : 1020;
   const issues = useMemo(() => collectAssignmentIssues(draftTasks, shift), [draftTasks, shift]);
   const prevDayKey = getPreviousDayKey(dayKey);
   const otherDayOptions = useMemo(() => DAY_META.filter(day => day.key !== dayKey), [dayKey]);
+  const replacementOptions = useMemo(
+    () => (Array.isArray(staff) ? staff : [])
+      .filter(member => member && member.id !== person.id)
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name, 'sv')),
+    [staff, person.id]
+  );
   const quickTemplates = useMemo(
     () => ASSIGNMENT_TEMPLATES.filter(template => ['lesson', 'collab', 'yard', 'break', 'pedLunch', 'resource', 'planning', 'meeting'].includes(template.type)),
     []
@@ -5496,6 +5686,7 @@ function AssignmentEditorModal({ person, dayKey, shift, tasks, previousTasks = [
   };
 
   const addTask = (type = 'lesson', duration = 30, labelOverride = null) => {
+    if (!hasShift) return;
     const suggested = findSuggestedAssignmentWindow(draftTasksRef.current, shiftStart, shiftEnd, duration);
     const item = normalizeAssignment({
       id: createAssignmentId(),
@@ -5506,12 +5697,18 @@ function AssignmentEditorModal({ person, dayKey, shift, tasks, previousTasks = [
       target: '',
       notes: '',
       mustCover: assignmentRequiresCoverByDefault(type),
+      preferredCoverPersonId: '',
+      releaseForCover: assignmentCanReleaseByDefault(type),
     });
     setDraftTasks(prev => [item, ...prev]);
   };
   const addTemplateTask = (template) => addTask(template.type, template.duration, inferAssignmentLabel(template.type));
 
   const handleSave = () => {
+    if (!hasShift) {
+      alert('Lägg först ett arbetspass på den här dagen innan du sparar uppdrag.');
+      return;
+    }
     if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
@@ -5546,20 +5743,24 @@ function AssignmentEditorModal({ person, dayKey, shift, tasks, previousTasks = [
 
           <div className="flex gap-2 flex-wrap">
             <button type="button" onClick={() => addTask('lesson', 30)}
-              className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-1.5">
+              disabled={!hasShift}
+              className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-stone-800">
               <Plus size={13} />Lägg tomt uppdrag
             </button>
             <button type="button" onClick={() => addTask('fritids')}
-              className="px-3 py-2 rounded-lg text-sm bg-teal-50 text-teal-800 ring-1 ring-teal-200 hover:bg-teal-100 transition">
+              disabled={!hasShift}
+              className="px-3 py-2 rounded-lg text-sm bg-teal-50 text-teal-800 ring-1 ring-teal-200 hover:bg-teal-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-teal-50">
               Lägg Fritids
             </button>
             <button type="button" onClick={() => addTask('school')}
-              className="px-3 py-2 rounded-lg text-sm bg-slate-100 text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200 transition">
+              disabled={!hasShift}
+              className="px-3 py-2 rounded-lg text-sm bg-slate-100 text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-slate-100">
               Lägg Skoldel
             </button>
             {prevDayKey && previousTasks.length > 0 && (
               <button type="button" onClick={() => setDraftTasks(previousTasks.map(task => ({ ...task, id: createAssignmentId() })))}
-                className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">
+                disabled={!hasShift}
+                className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white">
                 Kopiera från {getDayMeta(prevDayKey).label.toLowerCase()}
               </button>
             )}
@@ -5587,7 +5788,8 @@ function AssignmentEditorModal({ person, dayKey, shift, tasks, previousTasks = [
                     key={template.id}
                     type="button"
                     onClick={() => addTemplateTask(template)}
-                    className="px-3 py-2 rounded-full text-sm transition ring-1 hover:-translate-y-[1px]"
+                    disabled={!hasShift}
+                    className="px-3 py-2 rounded-full text-sm transition ring-1 hover:-translate-y-[1px] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
                     style={{
                       backgroundColor: `${meta.color}12`,
                       borderColor: `${meta.color}3d`,
@@ -5696,6 +5898,7 @@ function AssignmentEditorModal({ person, dayKey, shift, tasks, previousTasks = [
                               type: nextType,
                               label: task.label === inferAssignmentLabel(task.type) ? inferAssignmentLabel(nextType) : task.label,
                               mustCover: assignmentRequiresCoverByDefault(nextType),
+                              releaseForCover: assignmentCanReleaseByDefault(nextType),
                             });
                           }}>
                           {ASSIGNMENT_TYPES.map(type => (
@@ -5730,6 +5933,25 @@ function AssignmentEditorModal({ person, dayKey, shift, tasks, previousTasks = [
                           placeholder="frivilligt stödminne"
                           onChange={e => updateTask(task.id, { notes: e.target.value })} />
                       </div>
+                      <div className="md:col-span-3">
+                        <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Föreslå först vid frånvaro</label>
+                        <select className="task-input w-full" value={task.preferredCoverPersonId || ''}
+                          onChange={e => updateTask(task.id, { preferredCoverPersonId: e.target.value })}>
+                          <option value="">Ingen särskild</option>
+                          {replacementOptions.map(option => (
+                            <option key={`pref-cover-${task.id}-${option.id}`} value={option.id}>{option.name}</option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-stone-400 mt-1">Bra när du redan vet vem som brukar ta passet om just det här uppdraget faller bort.</p>
+                      </div>
+                      <div className="md:col-span-3">
+                        <Toggle
+                          checked={task.releaseForCover}
+                          onChange={(checked) => updateTask(task.id, { releaseForCover: checked })}
+                          label="Kan släppas för att täcka annat"
+                          hint="Passar ofta för resurs eller planering. Drift prioriterar då uppdraget som lättare att flytta vid akut frånvaro."
+                        />
+                      </div>
                       <div className="md:col-span-6">
                         <Toggle
                           checked={task.mustCover}
@@ -5756,7 +5978,8 @@ function AssignmentEditorModal({ person, dayKey, shift, tasks, previousTasks = [
               Avbryt
             </button>
             <button type="button" onClick={handleSave}
-              className="px-4 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition">
+              disabled={!hasShift}
+              className="px-4 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-stone-800">
               Spara uppdrag
             </button>
           </div>
