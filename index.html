@@ -158,6 +158,22 @@ function getFridayShift(person, week, cycleWeeks, fridayTemplateRotation = []) {
   return null;
 }
 
+function isPersonOffEveryFriday(person, cycleWeeks, fridayTemplateRotation = []) {
+  if ((person.daysOff || []).includes('fri')) return true;
+  if (person.fridayMode === 'fixed') return !normalizeShift(person.fridayShift);
+  if (person.fridayMode === 'rotation') {
+    const effectiveRotation = buildEffectiveFridayRotation(person, cycleWeeks, fridayTemplateRotation);
+    return effectiveRotation.length > 0 && effectiveRotation.every(shift => !normalizeShift(shift));
+  }
+  return false;
+}
+
+function getOverviewDaysOffLabels(person, cycleWeeks, fridayTemplateRotation = []) {
+  const offDays = new Set((person.daysOff || []).filter(day => WEEKDAY_KEYS.includes(day)));
+  if (isPersonOffEveryFriday(person, cycleWeeks, fridayTemplateRotation)) offDays.add('fri');
+  return DAY_META.filter(day => offDays.has(day.key)).map(day => day.short);
+}
+
 // Snittlig fredagstid över cykeln, räknad som arbetstid efter rastregel.
 function avgFridayWorkedMinutes(person, cycleWeeks, fridayTemplateRotation = []) {
   if (!person.hasFridayRotation && person.fridayShift) return workedDayMinutes(person.fridayShift);
@@ -3468,7 +3484,7 @@ function FritidsSchemaApp() {
               <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Fritidshem · schemaverktyg</p>
               <h1 className="display-font text-4xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>SchemaFIX</h1>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <p className="text-stone-600 text-sm">Prototyp v41 · rastregel i timräkningen</p>
+              <p className="text-stone-600 text-sm">Prototyp v42 · tydligare fredag i översikten</p>
                 {dirty && (
                   <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
                     <Circle size={6} fill="currentColor" />
@@ -5052,9 +5068,11 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
               if (overrideDays.length > 0) tags.push(`Dagsundantag: ${overrideDays.map(k => getDayMeta(k).short).join(', ')}`);
               const parityKeys = Object.keys(s.parityOverrides || {}).filter(k => s.parityOverrides[k] && Object.values(s.parityOverrides[k]).some(v => v != null));
               if (parityKeys.length > 0) tags.push(`Varannan: ${parityKeys.map(k => k === 'even' ? 'jämn' : 'udda').join(', ')}`);
-              if ((s.daysOff || []).length > 0) tags.push(`Ledig ${s.daysOff.map(d => getDayMeta(d).short).join(', ')}`);
+              const offDayLabels = getOverviewDaysOffLabels(s, fridayCycleWeeks, fridayTemplateRotation);
+              if (offDayLabels.length > 0) tags.push(`Ledig ${offDayLabels.join(', ')}`);
               if (s.fridayMode === 'rotation' && s.fridayUseTemplate) tags.push(`Fredagsmall: start v${s.fridayTemplateStartWeek || 1}`);
-              if (s.fridayMode === 'fixed' && s.fridayShift) tags.push('Fast fredag');
+              if (s.fridayMode === 'fixed' && normalizeShift(s.fridayShift)) tags.push('Fast fredag');
+              if (s.fridayMode === 'fixed' && !normalizeShift(s.fridayShift)) tags.push('Utanför fredagsrullen');
               if (s.fridayMode === 'passbank') tags.push('Passbank på fredag');
               if (s.fridayMode == null) tags.push('? Fredagsläge ej valt');
               return (
@@ -7699,7 +7717,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
             <div className="flex gap-1 p-1 bg-stone-100 rounded-lg mb-3">
               {[
                 { key: 'passbank', label: 'Passbank', hint: 'Genereras som mån-tor' },
-                { key: 'fixed', label: 'Fast tid', hint: 'Samma varje vecka' },
+                { key: 'fixed', label: 'Fast tid / Ledig', hint: 'Samma varje vecka eller ledig' },
                 { key: 'rotation', label: 'Rull', hint: `${fridayCycleWeeks}-veckors rotation` },
               ].map(opt => (
                 <button key={opt.key} type="button" onClick={() => setFridayMode(opt.key)}
@@ -7720,7 +7738,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                 <p style={{ fontWeight: 500 }} className="mb-1">Välj fredagshantering ovan</p>
                 <p className="text-xs text-stone-600">
                   <strong>Passbank</strong> rekommenderas om fredag fungerar likadant som övriga vardagar.
-                  {' '}<strong>Fast tid</strong> om personen alltid har samma fredag (eller alltid är ledig).
+                  {' '}<strong>Fast tid / Ledig</strong> om personen alltid har samma fredag eller inte ska arbeta fredag alls.
                   {' '}<strong>Rull</strong> om fredagstiderna varierar enligt en veckorotation.
                 </p>
               </div>
@@ -7850,17 +7868,24 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
 
             {/* Fast-läge: befintligt fast-fredag-UI */}
             {form.fridayMode === 'fixed' && (
-              <div className="mt-1 flex items-center gap-3 flex-wrap">
-                <span className="text-sm text-stone-700 w-20">Fast fredag</span>
-                <input type="time" className="input w-32" value={form.fridayShift?.[0] || ''} onChange={e => setForm({ ...form, fridayShift: [e.target.value, form.fridayShift?.[1] || ''] })} />
-                <span className="text-stone-400">–</span>
-                <input type="time" className="input w-32" value={form.fridayShift?.[1] || ''} onChange={e => setForm({ ...form, fridayShift: [form.fridayShift?.[0] || '', e.target.value] })} />
-                {form.fridayShift?.[0] && form.fridayShift?.[1] && (
-                  <span className="text-xs text-stone-500">{minToHM(dayMinutes(form.fridayShift))}</span>
-                )}
-                <button onClick={() => setForm({ ...form, fridayShift: null })} className="ml-auto text-[10px] px-2 py-0.5 rounded bg-stone-100 text-stone-600 hover:bg-stone-200" type="button">
-                  Markera som ledig
-                </button>
+              <div className="mt-1 space-y-2">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-sm text-stone-700 w-28">Fast fredag</span>
+                  <input type="time" className="input w-32" value={form.fridayShift?.[0] || ''} disabled={fixedFridayOff} onChange={e => setForm({ ...form, fridayShift: [e.target.value, form.fridayShift?.[1] || ''] })} />
+                  <span className="text-stone-400">–</span>
+                  <input type="time" className="input w-32" value={form.fridayShift?.[1] || ''} disabled={fixedFridayOff} onChange={e => setForm({ ...form, fridayShift: [form.fridayShift?.[0] || '', e.target.value] })} />
+                  {!fixedFridayOff && form.fridayShift?.[0] && form.fridayShift?.[1] && (
+                    <span className="text-xs text-stone-500">{minToHM(dayMinutes(form.fridayShift))}</span>
+                  )}
+                  <button onClick={() => setFixedFridayOff(!fixedFridayOff)} className={`ml-auto text-[10px] px-2 py-0.5 rounded ${fixedFridayOff ? 'bg-stone-700 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`} type="button">
+                    {fixedFridayOff ? 'Återställ fredagstid' : 'Markera som ledig varje fredag'}
+                  </button>
+                </div>
+                <p className="text-[11px] text-stone-500">
+                  {!form.fridayShift
+                    ? 'Personen är markerad som ledig varje fredag och ingår inte i fredagsrullen.'
+                    : 'Använd det här om personen alltid har samma fredagstid. Om personen inte arbetar fredag alls, markera ledig i stället.'}
+                </p>
               </div>
             )}
           </Section>
