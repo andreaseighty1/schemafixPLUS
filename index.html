@@ -254,13 +254,20 @@ const ASSIGNMENT_TYPES = [
 ];
 const ASSIGNMENT_TYPE_IDS = ASSIGNMENT_TYPES.map(type => type.id);
 const ASSIGNMENT_TEMPLATES = [
+  { id: 'lesson-40', type: 'lesson', label: 'Lektion 40 min', duration: 40 },
   { id: 'lesson-60', type: 'lesson', label: 'Lektion 60 min', duration: 60 },
+  { id: 'lesson-80', type: 'lesson', label: 'Lektion 80 min', duration: 80 },
+  { id: 'collab-40', type: 'collab', label: 'Samverkan 40 min', duration: 40 },
+  { id: 'collab-60', type: 'collab', label: 'Samverkan 60 min', duration: 60 },
   { id: 'collab-90', type: 'collab', label: 'Samverkan 90 min', duration: 90 },
-  { id: 'collab-70', type: 'collab', label: 'Samverkan 70 min', duration: 70 },
+  { id: 'resource-40', type: 'resource', label: 'Resurs 40 min', duration: 40 },
+  { id: 'resource-60', type: 'resource', label: 'Resurs 60 min', duration: 60 },
+  { id: 'resource-80', type: 'resource', label: 'Resurs 80 min', duration: 80 },
   { id: 'yard-20', type: 'yard', label: 'Rastvärd 20 min', duration: 20 },
+  { id: 'yard-30', type: 'yard', label: 'Rastvärd 30 min', duration: 30 },
+  { id: 'yard-40', type: 'yard', label: 'Rastvärd 40 min', duration: 40 },
   { id: 'break-30', type: 'break', label: 'Rast 30 min', duration: 30 },
   { id: 'pedlunch-20', type: 'pedLunch', label: 'Pedagogisk lunch 20 min', duration: 20 },
-  { id: 'resource-60', type: 'resource', label: 'Resurs 60 min', duration: 60 },
   { id: 'planning-60', type: 'planning', label: 'Planering 60 min', duration: 60 },
   { id: 'meeting-30', type: 'meeting', label: 'Möte 30 min', duration: 30 },
 ];
@@ -913,6 +920,10 @@ function normalizeAssignment(item, options = {}) {
   if (!item || typeof item !== 'object') return null;
   const start = clamp(roundToStep(asNumber(item.start, 480)), 0, 24 * 60);
   const end = clamp(roundToStep(asNumber(item.end, start + SLOT_STEP_MINUTES)), start + SLOT_STEP_MINUTES, 24 * 60);
+  const rawDurationMinutes = asNumber(item.durationMinutes, null);
+  const durationMinutes = rawDurationMinutes == null
+    ? null
+    : clamp(roundToStep(rawDurationMinutes), SLOT_STEP_MINUTES, 24 * 60);
   const type = ASSIGNMENT_TYPE_IDS.includes(item.type) ? item.type : 'other';
   const hasExplicitLabel = Object.prototype.hasOwnProperty.call(item, 'label');
   const rawLabel = item.label == null ? '' : String(item.label);
@@ -932,6 +943,7 @@ function normalizeAssignment(item, options = {}) {
     label: hasExplicitLabel ? rawLabel : inferAssignmentLabel(type),
     start,
     end,
+    durationMinutes,
     target: rawTarget,
     notes: rawNotes,
     mustCover: !!item.mustCover,
@@ -3321,7 +3333,7 @@ function FritidsSchemaApp() {
               <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Fritidshem · schemaverktyg</p>
               <h1 className="display-font text-4xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>SchemaFIX</h1>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <p className="text-stone-600 text-sm">Prototyp v35 · säkrare uppdragssparning</p>
+              <p className="text-stone-600 text-sm">Prototyp v37 · uppdragsblock följer tid</p>
                 {dirty && (
                   <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
                     <Circle size={6} fill="currentColor" />
@@ -3470,6 +3482,7 @@ function FritidsSchemaApp() {
           key={`${assignmentEditor.personId}-${assignmentEditor.dayKey}`}
           person={staff.find(s => s.id === assignmentEditor.personId)}
           staff={staff}
+          assignments={assignments}
           dayKey={assignmentEditor.dayKey}
           shift={getShiftForDay(staff.find(s => s.id === assignmentEditor.personId) || {}, assignmentEditor.dayKey, {
             fridayWeek: currentFridayWeek,
@@ -4904,12 +4917,12 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Start</label>
-              <TimeTextInput className="task-input w-full" valueMinutes={assignmentWindows?.sharedMorning?.start}
+              <TimeTextInput className="task-input w-full" valueMinutes={assignmentWindows?.sharedMorning?.start} showSteppers stepMinutes={5}
                 onCommit={(minutes) => updateSharedWindow({ start: minutes })} />
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Slut</label>
-              <TimeTextInput className="task-input w-full" valueMinutes={assignmentWindows?.sharedMorning?.end}
+              <TimeTextInput className="task-input w-full" valueMinutes={assignmentWindows?.sharedMorning?.end} showSteppers stepMinutes={5}
                 onCommit={(minutes) => updateSharedWindow({ end: minutes })} />
             </div>
           </div>
@@ -4935,12 +4948,12 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                 />
                 <div>
                   <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Fritids start</label>
-                  <TimeTextInput className="task-input w-full" valueMinutes={assignmentWindows?.deptWindows?.[dept.id]?.start}
+                  <TimeTextInput className="task-input w-full" valueMinutes={assignmentWindows?.deptWindows?.[dept.id]?.start} showSteppers stepMinutes={5}
                     onCommit={(minutes) => updateDeptWindow(dept.id, { start: minutes })} />
                 </div>
                 <div>
                   <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Fritids slut</label>
-                  <TimeTextInput className="task-input w-full" valueMinutes={assignmentWindows?.deptWindows?.[dept.id]?.end}
+                  <TimeTextInput className="task-input w-full" valueMinutes={assignmentWindows?.deptWindows?.[dept.id]?.end} showSteppers stepMinutes={5}
                     onCommit={(minutes) => updateDeptWindow(dept.id, { end: minutes })} />
                 </div>
               </div>
@@ -5644,11 +5657,12 @@ function DriftView({
   );
 }
 
-function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previousTasks = [], onSave, onClose }) {
+function AssignmentEditorModal({ person, staff = [], assignments = {}, dayKey, shift, tasks, previousTasks = [], onSave, onClose }) {
   if (!person) return null;
   const [draftTasks, setDraftTasks] = useState(() => sortAssignments((Array.isArray(tasks) ? tasks : []).map(task => ({ ...task }))));
   const draftTasksRef = useRef(draftTasks);
   const [copyDayKeys, setCopyDayKeys] = useState([]);
+  const [copyFromPersonId, setCopyFromPersonId] = useState('');
   const hasShift = !!shift;
   const shiftStart = shift ? timeToMin(shift[0]) : 480;
   const shiftEnd = shift ? timeToMin(shift[1]) : 1020;
@@ -5662,6 +5676,11 @@ function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previ
       .sort((a, b) => a.name.localeCompare(b.name, 'sv')),
     [staff, person.id]
   );
+  const selectedCopySource = replacementOptions.find(option => String(option.id) === String(copyFromPersonId)) || null;
+  const copySourceTasks = useMemo(
+    () => selectedCopySource ? getAssignmentsForDay(assignments, selectedCopySource.id, dayKey) : [],
+    [selectedCopySource, assignments, dayKey]
+  );
   const quickTemplates = useMemo(
     () => ASSIGNMENT_TEMPLATES.filter(template => ['lesson', 'collab', 'yard', 'break', 'pedLunch', 'resource', 'planning', 'meeting'].includes(template.type)),
     []
@@ -5671,11 +5690,35 @@ function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previ
     draftTasksRef.current = draftTasks;
   }, [draftTasks]);
 
+  const applyTaskPatch = (task, patch) => {
+    const next = normalizeAssignment({ ...task, ...patch });
+    return next || task;
+  };
+
   const updateTask = (taskId, patch) => {
     setDraftTasks(prev => prev.map(task => {
       if (task.id !== taskId) return task;
-      const next = normalizeAssignment({ ...task, ...patch });
-      return next || task;
+      return applyTaskPatch(task, patch);
+    }));
+  };
+
+  const updateTaskStart = (taskId, startMinutes) => {
+    setDraftTasks(prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+      const patch = { start: startMinutes };
+      if (task.durationMinutes != null) patch.end = startMinutes + task.durationMinutes;
+      return applyTaskPatch(task, patch);
+    }));
+  };
+
+  const updateTaskEnd = (taskId, endMinutes) => {
+    setDraftTasks(prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+      const patch = { end: endMinutes };
+      if (task.durationMinutes != null) {
+        patch.durationMinutes = Math.max(SLOT_STEP_MINUTES, roundToStep(endMinutes - task.start));
+      }
+      return applyTaskPatch(task, patch);
     }));
   };
 
@@ -5685,7 +5728,7 @@ function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previ
     setCopyDayKeys(prev => prev.includes(targetDayKey) ? prev.filter(key => key !== targetDayKey) : [...prev, targetDayKey]);
   };
 
-  const addTask = (type = 'lesson', duration = 30, labelOverride = null) => {
+  const addTask = (type = 'lesson', duration = 30, labelOverride = null, options = {}) => {
     if (!hasShift) return;
     const suggested = findSuggestedAssignmentWindow(draftTasksRef.current, shiftStart, shiftEnd, duration);
     const item = normalizeAssignment({
@@ -5699,10 +5742,17 @@ function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previ
       mustCover: assignmentRequiresCoverByDefault(type),
       preferredCoverPersonId: '',
       releaseForCover: assignmentCanReleaseByDefault(type),
+      durationMinutes: options.lockDuration ? duration : null,
     });
     setDraftTasks(prev => [item, ...prev]);
   };
-  const addTemplateTask = (template) => addTask(template.type, template.duration, inferAssignmentLabel(template.type));
+  const addTemplateTask = (template) => addTask(template.type, template.duration, inferAssignmentLabel(template.type), { lockDuration: true });
+  const applyCopiedTasks = (sourceTasks = []) => {
+    setDraftTasks((Array.isArray(sourceTasks) ? sourceTasks : []).map(task => ({
+      ...task,
+      id: createAssignmentId(),
+    })));
+  };
 
   const handleSave = () => {
     if (!hasShift) {
@@ -5776,30 +5826,43 @@ function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previ
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div>
                 <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Snabbmallar</p>
-                <p className="text-sm text-stone-600">Mallarna lägger sig i första lediga lucka inom passet och ger dig en bra start som du sedan kan finjustera.</p>
+                <p className="text-sm text-stone-600">Mallarna lägger sig i första lediga lucka inom passet och ger dig en snabb start när du bygger om läsåret.</p>
               </div>
               <span className="text-xs px-2 py-1 rounded-full bg-stone-100 text-stone-600">Smart starttid inom passet</span>
             </div>
-            <div className="flex flex-wrap gap-2 mt-3">
-              {quickTemplates.map(template => {
-                const meta = getAssignmentTypeMeta(template.type);
-                return (
-                  <button
-                    key={template.id}
-                    type="button"
-                    onClick={() => addTemplateTask(template)}
-                    disabled={!hasShift}
-                    className="px-3 py-2 rounded-full text-sm transition ring-1 hover:-translate-y-[1px] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
-                    style={{
-                      backgroundColor: `${meta.color}12`,
-                      borderColor: `${meta.color}3d`,
-                      color: '#292524',
-                    }}
-                  >
-                    {template.label}
-                  </button>
-                );
-              })}
+            <div className="space-y-3 mt-3">
+              {[
+                { title: 'Lektion', templates: quickTemplates.filter(template => template.type === 'lesson') },
+                { title: 'Rastvärd', templates: quickTemplates.filter(template => template.type === 'yard') },
+                { title: 'Resurs', templates: quickTemplates.filter(template => template.type === 'resource') },
+                { title: 'Samverkan', templates: quickTemplates.filter(template => template.type === 'collab') },
+                { title: 'Övrigt', templates: quickTemplates.filter(template => ['break', 'pedLunch', 'planning', 'meeting'].includes(template.type)) },
+              ].map(group => (
+                <div key={group.title}>
+                  <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">{group.title}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {group.templates.map(template => {
+                      const meta = getAssignmentTypeMeta(template.type);
+                      return (
+                        <button
+                          key={template.id}
+                          type="button"
+                          onClick={() => addTemplateTask(template)}
+                          disabled={!hasShift}
+                          className="px-3 py-2 rounded-full text-sm transition ring-1 hover:-translate-y-[1px] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
+                          style={{
+                            backgroundColor: `${meta.color}12`,
+                            borderColor: `${meta.color}3d`,
+                            color: '#292524',
+                          }}
+                        >
+                          {template.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -5822,7 +5885,7 @@ function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previ
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                   <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Kopiera dagens uppdrag</p>
-                  <p className="text-sm text-stone-600">Välj andra dagar som ska få samma upplägg när du sparar.</p>
+                  <p className="text-sm text-stone-600">Kopiera från igår, från en annan person eller till flera andra dagar samtidigt.</p>
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <button
@@ -5841,6 +5904,37 @@ function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previ
                   </button>
                 </div>
               </div>
+              <div className="grid grid-cols-1 md:grid-cols-[1fr,auto] gap-3 mt-3">
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Kopiera från annan person samma dag</label>
+                  <select
+                    className="task-input w-full"
+                    value={copyFromPersonId}
+                    onChange={e => setCopyFromPersonId(e.target.value)}
+                    disabled={!hasShift}
+                  >
+                    <option value="">Välj person</option>
+                    {replacementOptions.map(option => (
+                      <option key={`copy-person-${option.id}`} value={option.id}>{option.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    disabled={!hasShift || !selectedCopySource}
+                    onClick={() => applyCopiedTasks(copySourceTasks)}
+                    className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
+                  >
+                    Kopiera från person
+                  </button>
+                </div>
+              </div>
+              {selectedCopySource && (
+                <p className="text-[10px] text-stone-500 mt-2">
+                  Hämtar {copySourceTasks.length} uppdrag från {selectedCopySource.name} på {getDayMeta(dayKey).label.toLowerCase()}.
+                </p>
+              )}
               <div className="flex flex-wrap gap-2 mt-3">
                 {otherDayOptions.map(day => {
                   const active = copyDayKeys.includes(day.key);
@@ -5913,13 +6007,20 @@ function AssignmentEditorModal({ person, staff = [], dayKey, shift, tasks, previ
                       </div>
                       <div>
                         <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Start</label>
-                        <TimeTextInput className="task-input w-full" valueMinutes={task.start}
-                          onCommit={(minutes) => updateTask(task.id, { start: minutes })} />
+                        <TimeTextInput className="task-input w-full" valueMinutes={task.start} showSteppers stepMinutes={5}
+                          onCommit={(minutes) => updateTaskStart(task.id, minutes)} />
                       </div>
                       <div>
                         <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Slut</label>
-                        <TimeTextInput className="task-input w-full" valueMinutes={task.end}
-                          onCommit={(minutes) => updateTask(task.id, { end: minutes })} />
+                        <TimeTextInput className="task-input w-full" valueMinutes={task.end} showSteppers stepMinutes={5}
+                          onCommit={(minutes) => updateTaskEnd(task.id, minutes)} />
+                      </div>
+                      <div className="md:col-span-6">
+                        <p className="text-[10px] text-stone-400">
+                          {task.durationMinutes != null
+                            ? `Det här blocket behåller ${task.durationMinutes} minuters längd när du ändrar starttiden.`
+                            : 'Egen längd: start och slut styrs var för sig.'}
+                        </p>
                       </div>
                       <div className="md:col-span-3">
                         <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Klass / plats / mål</label>
@@ -7419,7 +7520,7 @@ function Field({ label, tip, children }) {
   );
 }
 
-function TimeTextInput({ valueMinutes, onCommit, className = '', disabled = false, placeholder = 'HH:MM' }) {
+function TimeTextInput({ valueMinutes, onCommit, className = '', disabled = false, placeholder = 'HH:MM', showSteppers = false, stepMinutes = 5 }) {
   const [draft, setDraft] = useState(valueMinutes != null ? minToTime(valueMinutes) : '');
 
   useEffect(() => {
@@ -7440,27 +7541,89 @@ function TimeTextInput({ valueMinutes, onCommit, className = '', disabled = fals
     setDraft(normalized);
     onCommit(parsed);
   };
+  const nudgeTime = (delta) => {
+    const current = parseFlexibleTimeInput(draft) ?? valueMinutes;
+    const base = current == null ? 8 * 60 : current;
+    const next = clamp(roundToStep(base + delta), 0, 24 * 60);
+    const normalized = minToTime(next);
+    setDraft(normalized);
+    onCommit(next);
+  };
+
+  if (!showSteppers) {
+    return (
+      <input
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        spellCheck="false"
+        className={className}
+        value={draft}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={e => setDraft(e.target.value)}
+        onFocus={(e) => e.target.select()}
+        onBlur={commitDraft}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commitDraft();
+          }
+        }}
+      />
+    );
+  }
 
   return (
-    <input
-      type="text"
-      inputMode="numeric"
-      autoComplete="off"
-      spellCheck="false"
-      className={className}
-      value={draft}
-      disabled={disabled}
-      placeholder={placeholder}
-      onChange={e => setDraft(e.target.value)}
-      onFocus={(e) => e.target.select()}
-      onBlur={commitDraft}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          commitDraft();
-        }
-      }}
-    />
+    <div className="flex items-stretch gap-1">
+      <input
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        spellCheck="false"
+        className={`${className} flex-1`}
+        value={draft}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={e => setDraft(e.target.value)}
+        onFocus={(e) => e.target.select()}
+        onBlur={commitDraft}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commitDraft();
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            nudgeTime(stepMinutes);
+          }
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            nudgeTime(-stepMinutes);
+          }
+        }}
+      />
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => nudgeTime(stepMinutes)}
+          className="h-[18px] w-7 rounded-md bg-stone-100 text-stone-600 ring-1 ring-stone-200 hover:bg-stone-200 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-stone-100"
+          title={`+${stepMinutes} min`}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => nudgeTime(-stepMinutes)}
+          className="h-[18px] w-7 rounded-md bg-stone-100 text-stone-600 ring-1 ring-stone-200 hover:bg-stone-200 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-stone-100"
+          title={`-${stepMinutes} min`}
+        >
+          -
+        </button>
+      </div>
+    </div>
   );
 }
 
