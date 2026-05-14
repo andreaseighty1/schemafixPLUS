@@ -143,6 +143,7 @@ function hasFridayTemplateOverride(person, week) {
 }
 
 function getFridayShift(person, week, cycleWeeks, fridayTemplateRotation = []) {
+  if ((person.daysOff || []).includes('fri')) return null;
   if (!person.hasFridayRotation && person.fridayShift) return person.fridayShift;
   if (person.hasFridayRotation && person.fridayUseTemplate) {
     if (hasFridayTemplateOverride(person, week)) {
@@ -176,6 +177,7 @@ function getOverviewDaysOffLabels(person, cycleWeeks, fridayTemplateRotation = [
 
 // Snittlig fredagstid över cykeln, räknad som arbetstid efter rastregel.
 function avgFridayWorkedMinutes(person, cycleWeeks, fridayTemplateRotation = []) {
+  if ((person.daysOff || []).includes('fri')) return 0;
   if (!person.hasFridayRotation && person.fridayShift) return workedDayMinutes(person.fridayShift);
   if (!person.hasFridayRotation) return 0;
   if (!person.fridayUseTemplate && (!Array.isArray(person.fridayRotation) || person.fridayRotation.length === 0)) return 0;
@@ -1587,6 +1589,7 @@ function getSuggestedDayMinutes(person, cycleWeeks, fridayTemplateRotation = [])
   const isPassbank = person.fridayMode === 'passbank';
   const dayKeys = isPassbank ? [...WEEKDAY_KEYS, 'fri'] : WEEKDAY_KEYS;
   const explicitDayMinutes = dayKeys
+    .filter(key => !(person.daysOff || []).includes(key))
     .map(key => normalizeShift(person.sched?.[key]))
     .filter(Boolean)
     .map(dayMinutes)
@@ -1859,22 +1862,25 @@ function prepareStaffForUse(staff, cycleWeeks = 8, fridayTemplateRotation = [], 
 }
 function weeklyMinutes(staff, cycleWeeks = 8, fridayTemplateRotation = []) {
   let total = 0;
-  for (const d of DAYS) if (staff.sched?.[d.key]) total += workedDayMinutes(staff.sched[d.key]);
+  for (const d of DAYS) {
+    if ((staff.daysOff || []).includes(d.key)) continue;
+    if (staff.sched?.[d.key]) total += workedDayMinutes(staff.sched[d.key]);
+  }
   // Fredag: passbank-läget räknar sched.fri direkt; övriga lägen använder
   // legacy-snittet över rullen (avgFridayWorkedMinutes returnerar 0 för passbank-läge
   // eftersom fridayShift och fridayRotation då är tomma, så vi kan inte bara
   // alltid kalla det – vi måste byta beräkningssätt baserat på läge).
   if (staff.fridayMode === 'passbank') {
-    if (staff.sched?.fri) total += workedDayMinutes(staff.sched.fri);
+    if (!(staff.daysOff || []).includes('fri') && staff.sched?.fri) total += workedDayMinutes(staff.sched.fri);
   } else {
     total += avgFridayWorkedMinutes(staff, cycleWeeks, fridayTemplateRotation);
   }
   return Math.round(total);
 }
 function hasWeekdaySchedule(person) {
-  if (DAYS.some(d => normalizeShift(person.sched?.[d.key]))) return true;
+  if (DAYS.some(d => !(person.daysOff || []).includes(d.key) && normalizeShift(person.sched?.[d.key]))) return true;
   // Passbank-läget kan ha schemat enbart på fredag – räkna det också.
-  if (person.fridayMode === 'passbank' && normalizeShift(person.sched?.fri)) return true;
+  if (person.fridayMode === 'passbank' && !(person.daysOff || []).includes('fri') && normalizeShift(person.sched?.fri)) return true;
   return false;
 }
 
@@ -1900,6 +1906,7 @@ function generatorDaysForPerson(person) {
 }
 
 function getShiftForDay(person, dayKey, options = {}) {
+  if ((person.daysOff || []).includes(dayKey)) return null;
   if (dayKey === 'fri') {
     // Passbank-läget: fredag bor i sched.fri precis som vilken annan dag.
     if (person.fridayMode === 'passbank') {
@@ -3500,7 +3507,7 @@ function FritidsSchemaApp() {
               <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Fritidshem · schemaverktyg</p>
               <h1 className="display-font text-4xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>SchemaFIX</h1>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <p className="text-stone-600 text-sm">Prototyp v43 · konsekvent rastavdrag i tider</p>
+              <p className="text-stone-600 text-sm">Prototyp v44 · lediga dagar räknas bort rätt</p>
                 {dirty && (
                   <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
                     <Circle size={6} fill="currentColor" />
