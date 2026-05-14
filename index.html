@@ -931,6 +931,22 @@ function workedMinutesFromSpan(rawMinutes) {
 function workedDayMinutes(sched) {
   return workedMinutesFromSpan(dayMinutes(sched));
 }
+function formatWorkedDurationFromRawMinutes(rawMinutes) {
+  return Number.isFinite(rawMinutes) ? minToHM(workedMinutesFromSpan(rawMinutes)) : '';
+}
+function getWorkedDurationTitleFromRawMinutes(rawMinutes) {
+  if (!Number.isFinite(rawMinutes)) return '';
+  const workedMinutes = workedMinutesFromSpan(rawMinutes);
+  return workedMinutes === rawMinutes
+    ? `Arbetstid: ${minToHM(workedMinutes)}`
+    : `Arbetstid efter 30 min rast: ${minToHM(workedMinutes)} (på plats ${minToHM(rawMinutes)})`;
+}
+function getWorkedShiftDurationLabel(shift) {
+  return formatWorkedDurationFromRawMinutes(dayMinutes(shift));
+}
+function getWorkedShiftDurationTitle(shift) {
+  return getWorkedDurationTitleFromRawMinutes(dayMinutes(shift));
+}
 function suggestedShiftMinutesFromWorkedTarget(workedMinutes) {
   if (!Number.isFinite(workedMinutes)) return 0;
   return workedMinutes > MANDATORY_BREAK_AFTER_MINUTES ? workedMinutes + MANDATORY_BREAK_MINUTES : workedMinutes;
@@ -3484,7 +3500,7 @@ function FritidsSchemaApp() {
               <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Fritidshem · schemaverktyg</p>
               <h1 className="display-font text-4xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>SchemaFIX</h1>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <p className="text-stone-600 text-sm">Prototyp v42 · tydligare fredag i översikten</p>
+              <p className="text-stone-600 text-sm">Prototyp v43 · konsekvent rastavdrag i tider</p>
                 {dirty && (
                   <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
                     <Circle size={6} fill="currentColor" />
@@ -3780,7 +3796,7 @@ function PrintableSchedule({ staff, departments, passBank, fridayCycleWeeks, cur
             dept: getDept(s.deptId, departments),
             shift,
             startMin,
-            durationMin: endMin - startMin,
+            workedDurationMin: workedMinutesFromSpan(endMin - startMin),
             passName: matchingPass?.name || '',
           };
         })
@@ -3799,6 +3815,7 @@ function PrintableSchedule({ staff, departments, passBank, fridayCycleWeeks, cur
         Utskrivet {printedDate}
         {savedFileName && ` · ${savedFileName}`}
         {` · Fredag visas för vecka ${currentFridayWeek} av ${fridayCycleWeeks}`}
+        {' · Varaktighet visas efter rastregel'}
       </p>
       {printDays.map(({ day, present }) => (
         <div key={day.key} className="print-day">
@@ -3820,7 +3837,7 @@ function PrintableSchedule({ staff, departments, passBank, fridayCycleWeeks, cur
                     <td className="print-role">{p.role || p.dept.name}</td>
                     <td className="print-time">{p.shift[0]} – {p.shift[1]}</td>
                     <td className="print-pass">{p.passName}</td>
-                    <td className="print-dur">{minToHM(p.durationMin)}</td>
+                    <td className="print-dur">{minToHM(p.workedDurationMin)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -4905,8 +4922,8 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
                       value={editDraft.end}
                       onChange={e => { setEditDraft(d => ({ ...d, end: e.target.value })); setEditError(''); }} />
                     {editDraft.start && editDraft.end && timeToMin(editDraft.end) > timeToMin(editDraft.start) && (
-                      <span className="text-[10px] text-stone-500 tabular-nums">
-                        {minToHM(timeToMin(editDraft.end) - timeToMin(editDraft.start))}
+                      <span className="text-[10px] text-stone-500 tabular-nums" title={getWorkedDurationTitleFromRawMinutes(timeToMin(editDraft.end) - timeToMin(editDraft.start))}>
+                        {formatWorkedDurationFromRawMinutes(timeToMin(editDraft.end) - timeToMin(editDraft.start))}
                       </span>
                     )}
                     {editError && <span className="text-[10px] text-rose-700 ml-1">{editError}</span>}
@@ -7161,8 +7178,8 @@ function SettingsView({ departments, setDepartments, staff, setStaff, coverageBl
                     value={sh ? sh[1] : ''}
                     onChange={e => updateTemplateWeek(w, 1, e.target.value)} />
                   {!isOff && (
-                    <span className="text-[10px] text-stone-500 tabular-nums ml-1">
-                      {minToHM(dayMinutes(sh))}
+                    <span className="text-[10px] text-stone-500 tabular-nums ml-1" title={getWorkedShiftDurationTitle(sh)}>
+                      {getWorkedShiftDurationLabel(sh)}
                     </span>
                   )}
                   <button type="button" onClick={() => setTemplateWeekOff(w, !isOff)}
@@ -7758,7 +7775,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                     <span className="text-stone-500">Nuvarande fredagspass:</span>{' '}
                     <span className="display-font text-sm text-stone-800 tabular-nums">{form.sched.fri[0]} – {form.sched.fri[1]}</span>
                     {' '}
-                    <span className="text-stone-400">({minToHM(dayMinutes(form.sched.fri))})</span>
+                    <span className="text-stone-400" title={getWorkedShiftDurationTitle(form.sched.fri)}>({getWorkedShiftDurationLabel(form.sched.fri)})</span>
                   </div>
                 ) : (
                   <p className="text-xs text-stone-500 ml-1">Inget pass tilldelat än. Klicka "Generera nytt schema" så fyller appen i.</p>
@@ -7822,8 +7839,8 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                           value={sh ? sh[1] : ''}
                           onChange={e => form.fridayUseTemplate ? updateFridayTemplateOverride(w, 1, e.target.value) : updateFridayWeek(w, 1, e.target.value)} />
                         {!isOff && (
-                          <span className="text-[10px] text-stone-500 tabular-nums ml-1">
-                            {minToHM(dayMinutes(sh))}
+                          <span className="text-[10px] text-stone-500 tabular-nums ml-1" title={getWorkedShiftDurationTitle(sh)}>
+                            {getWorkedShiftDurationLabel(sh)}
                           </span>
                         )}
                         {form.fridayUseTemplate ? (
@@ -7875,7 +7892,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                   <span className="text-stone-400">–</span>
                   <input type="time" className="input w-32" value={form.fridayShift?.[1] || ''} disabled={fixedFridayOff} onChange={e => setForm({ ...form, fridayShift: [form.fridayShift?.[0] || '', e.target.value] })} />
                   {!fixedFridayOff && form.fridayShift?.[0] && form.fridayShift?.[1] && (
-                    <span className="text-xs text-stone-500">{minToHM(dayMinutes(form.fridayShift))}</span>
+                    <span className="text-xs text-stone-500" title={getWorkedShiftDurationTitle(form.fridayShift)}>{getWorkedShiftDurationLabel(form.fridayShift)}</span>
                   )}
                   <button onClick={() => setFixedFridayOff(!fixedFridayOff)} className={`ml-auto text-[10px] px-2 py-0.5 rounded ${fixedFridayOff ? 'bg-stone-700 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`} type="button">
                     {fixedFridayOff ? 'Återställ fredagstid' : 'Markera som ledig varje fredag'}
@@ -7898,6 +7915,9 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
               <p className="text-xs text-stone-500 mt-3 mb-3">
                 Använd det här när du vill finjustera enskilda dagar efter att schemaförslag har tagits fram. Om tider saknas kan appen först fylla dem från passbank och regler.
               </p>
+              <p className="text-[11px] text-stone-500 mb-3">
+                Tidsetiketterna här visar arbetstid efter rastregeln. Själva passet ligger fortfarande mellan vald start- och sluttid.
+              </p>
               <div className="flex justify-end mb-3">
                 <button type="button" onClick={autofillWeekSchedule}
                   className="text-[11px] px-3 py-1.5 rounded-lg bg-stone-100 text-stone-700 hover:bg-stone-200 transition">
@@ -7914,7 +7934,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                       <span className="text-stone-400">–</span>
                       <input type="time" className="input w-32" value={form.sched[d.key]?.[1] || ''} disabled={isOff} onChange={e => updateShift(d.key, 1, e.target.value)} />
                       {form.sched[d.key]?.[0] && form.sched[d.key]?.[1] && !isOff && (
-                        <span className="text-xs text-stone-500 ml-1">{minToHM(dayMinutes(form.sched[d.key]))}</span>
+                        <span className="text-xs text-stone-500 ml-1" title={getWorkedShiftDurationTitle(form.sched[d.key])}>{getWorkedShiftDurationLabel(form.sched[d.key])}</span>
                       )}
                       <button type="button" onClick={() => toggleDayOff(d.key)}
                         className={`ml-auto text-[10px] px-2 py-0.5 rounded ${isOff ? 'bg-stone-700 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>
@@ -7934,7 +7954,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                       <input type="time" className="input w-32" value={form.sched?.fri?.[1] || ''}
                         onChange={e => updateShift('fri', 1, e.target.value)} />
                       {form.sched?.fri?.[0] && form.sched?.fri?.[1] && (
-                        <span className="text-xs text-stone-500 ml-1">{minToHM(dayMinutes(form.sched.fri))}</span>
+                        <span className="text-xs text-stone-500 ml-1" title={getWorkedShiftDurationTitle(form.sched.fri)}>{getWorkedShiftDurationLabel(form.sched.fri)}</span>
                       )}
                       <button type="button" onClick={() => {
                         const next = { ...(form.sched || {}) };
@@ -7954,7 +7974,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                       <input type="time" className="input w-32" value={form.fridayShift?.[1] || ''} disabled={fixedFridayOff}
                         onChange={e => setForm({ ...form, fridayShift: [form.fridayShift?.[0] || '', e.target.value] })} />
                       {!fixedFridayOff && form.fridayShift?.[0] && form.fridayShift?.[1] && (
-                        <span className="text-xs text-stone-500 ml-1">{minToHM(dayMinutes(form.fridayShift))}</span>
+                        <span className="text-xs text-stone-500 ml-1" title={getWorkedShiftDurationTitle(form.fridayShift)}>{getWorkedShiftDurationLabel(form.fridayShift)}</span>
                       )}
                       <button type="button" onClick={() => setFixedFridayOff(!fixedFridayOff)}
                         className={`ml-auto text-[10px] px-2 py-0.5 rounded ${fixedFridayOff ? 'bg-stone-700 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>
