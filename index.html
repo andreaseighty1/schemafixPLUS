@@ -1138,7 +1138,38 @@ function sortAssignments(list = []) {
     return String(a.id).localeCompare(String(b.id), 'sv');
   });
 }
-function normalizeAssignmentsMap(assignments, staff = []) {
+function getFridayAssignmentWeekKey(fridayWeek = 1, cycleWeeks = 8) {
+  const cycle = Math.max(1, Math.min(20, asNumber(cycleWeeks, 8) || 8));
+  return String(clamp(Math.round(asNumber(fridayWeek, 1) || 1), 1, cycle));
+}
+function normalizeFridayAssignmentWeeks(value, staff = [], ownerId = null, cycleWeeks = 8) {
+  const allowedStaffIds = new Set((Array.isArray(staff) ? staff : []).map(person => String(person.id)));
+  const normalizeList = (list) => sortAssignments((Array.isArray(list) ? list : [])
+    .map(item => normalizeAssignment(item, { allowedStaffIds, ownerId }))
+    .filter(Boolean));
+  const weeks = {};
+  const cycle = Math.max(1, Math.min(20, asNumber(cycleWeeks, 8) || 8));
+
+  if (Array.isArray(value)) {
+    const legacyList = normalizeList(value);
+    if (legacyList.length > 0) {
+      for (let week = 1; week <= cycle; week += 1) {
+        weeks[String(week)] = legacyList.map(item => ({ ...item }));
+      }
+    }
+    return weeks;
+  }
+
+  const sourceWeeks = value && typeof value === 'object'
+    ? (value.weeks && typeof value.weeks === 'object' ? value.weeks : value)
+    : {};
+  for (let week = 1; week <= cycle; week += 1) {
+    const list = normalizeList(sourceWeeks[String(week)]);
+    if (list.length > 0) weeks[String(week)] = list;
+  }
+  return weeks;
+}
+function normalizeAssignmentsMap(assignments, staff = [], fridayCycleWeeks = 8) {
   const allowedIds = new Set((Array.isArray(staff) ? staff : []).map(person => String(person.id)));
   const result = {};
   const source = assignments && typeof assignments === 'object' ? assignments : {};
@@ -1147,6 +1178,11 @@ function normalizeAssignmentsMap(assignments, staff = []) {
     if (!dayMap || typeof dayMap !== 'object') return;
     const normalizedDayMap = {};
     ALL_DAY_KEYS.forEach(dayKey => {
+      if (dayKey === 'fri') {
+        const weeks = normalizeFridayAssignmentWeeks(dayMap[dayKey], staff, personId, fridayCycleWeeks);
+        if (Object.keys(weeks).length > 0) normalizedDayMap.fri = { weeks };
+        return;
+      }
       const list = Array.isArray(dayMap[dayKey])
         ? dayMap[dayKey].map(item => normalizeAssignment(item, { allowedStaffIds: allowedIds, ownerId: personId })).filter(Boolean)
         : [];
@@ -1156,26 +1192,52 @@ function normalizeAssignmentsMap(assignments, staff = []) {
   });
   return result;
 }
-function normalizeDriftAbsences(absences, staff = []) {
+function getDriftStateKey(dayKey, fridayWeek = 1, cycleWeeks = 8) {
+  if (dayKey !== 'fri') return ALL_DAY_KEYS.includes(dayKey) ? dayKey : initialDriftState.dayKey;
+  return `fri:${getFridayAssignmentWeekKey(fridayWeek, cycleWeeks)}`;
+}
+function parseDriftStateKey(key, cycleWeeks = 8) {
+  const raw = String(key || '');
+  if (ALL_DAY_KEYS.includes(raw)) return { valid: true, dayKey: raw, fridayWeek: raw === 'fri' ? null : 1, legacyFriday: raw === 'fri' };
+  const match = raw.match(/^fri:(\d+)$/);
+  if (!match) return { valid: false, dayKey: '', fridayWeek: null, legacyFriday: false };
+  const week = Number(match[1]);
+  const cycle = Math.max(1, Math.min(20, asNumber(cycleWeeks, 8) || 8));
+  if (!Number.isFinite(week) || week < 1 || week > cycle) return { valid: false, dayKey: '', fridayWeek: null, legacyFriday: false };
+  return { valid: true, dayKey: 'fri', fridayWeek: week, legacyFriday: false };
+}
+function readDriftDayBucket(map, dayKey, fridayWeek = 1, cycleWeeks = 8) {
+  const source = map && typeof map === 'object' ? map : {};
+  if (dayKey !== 'fri') return source[dayKey];
+  const scopedKey = getDriftStateKey('fri', fridayWeek, cycleWeeks);
+  return source[scopedKey] || source.fri;
+}
+function normalizeDriftAbsences(absences, staff = [], fridayCycleWeeks = 8) {
   const allowedIds = new Set((Array.isArray(staff) ? staff : []).map(person => String(person.id)));
   const next = {};
   const source = absences && typeof absences === 'object' ? absences : {};
-  ALL_DAY_KEYS.forEach(dayKey => {
+  Object.entries(source).forEach(([stateKey, value]) => {
+    const parsed = parseDriftStateKey(stateKey, fridayCycleWeeks);
+    if (!parsed.valid) return;
+    const cleanStateKey = parsed.legacyFriday ? 'fri' : (parsed.dayKey === 'fri' ? getDriftStateKey('fri', parsed.fridayWeek, fridayCycleWeeks) : parsed.dayKey);
     const list = Array.from(new Set(
-      (Array.isArray(source[dayKey]) ? source[dayKey] : [])
+      (Array.isArray(value) ? value : [])
         .map(id => String(id))
         .filter(id => allowedIds.size === 0 || allowedIds.has(id))
     ));
-    if (list.length > 0) next[dayKey] = list;
+    if (list.length > 0) next[cleanStateKey] = list;
   });
   return next;
 }
-function normalizeDriftSolutions(solutions, staff = []) {
+function normalizeDriftSolutions(solutions, staff = [], fridayCycleWeeks = 8) {
   const allowedIds = new Set((Array.isArray(staff) ? staff : []).map(person => String(person.id)));
   const next = {};
   const source = solutions && typeof solutions === 'object' ? solutions : {};
-  ALL_DAY_KEYS.forEach(dayKey => {
-    const daySource = source[dayKey] && typeof source[dayKey] === 'object' ? source[dayKey] : {};
+  Object.entries(source).forEach(([stateKey, value]) => {
+    const parsed = parseDriftStateKey(stateKey, fridayCycleWeeks);
+    if (!parsed.valid) return;
+    const cleanStateKey = parsed.legacyFriday ? 'fri' : (parsed.dayKey === 'fri' ? getDriftStateKey('fri', parsed.fridayWeek, fridayCycleWeeks) : parsed.dayKey);
+    const daySource = value && typeof value === 'object' ? value : {};
     const daySolutions = {};
     Object.entries(daySource).forEach(([taskId, item]) => {
       if (!item || typeof item !== 'object') return;
@@ -1192,20 +1254,23 @@ function normalizeDriftSolutions(solutions, staff = []) {
         decidedAt: typeof item.decidedAt === 'string' ? item.decidedAt : '',
       };
     });
-    if (Object.keys(daySolutions).length > 0) next[dayKey] = daySolutions;
+    if (Object.keys(daySolutions).length > 0) next[cleanStateKey] = daySolutions;
   });
   return next;
 }
-function getDriftTemplateMatchKey(dayKey, absentPersonId, task) {
+function getDriftTemplateMatchKey(dayKey, absentPersonId, task, options = {}) {
   if (!ALL_DAY_KEYS.includes(dayKey) || !task) return '';
   const cleanAbsentId = String(absentPersonId || '').trim();
   const taskType = ASSIGNMENT_TYPE_IDS.includes(task.type) ? task.type : '';
   const taskStart = asNumber(task.start, null);
   const taskEnd = asNumber(task.end, null);
   if (!cleanAbsentId || !taskType || taskStart == null || taskEnd == null || taskStart >= taskEnd) return '';
-  return [dayKey, cleanAbsentId, taskType, roundToStep(taskStart), roundToStep(taskEnd)].join('|');
+  const fridayPart = dayKey === 'fri'
+    ? getFridayAssignmentWeekKey(options.fridayWeek || 1, options.cycleWeeks || 8)
+    : '';
+  return [dayKey, fridayPart, cleanAbsentId, taskType, roundToStep(taskStart), roundToStep(taskEnd)].join('|');
 }
-function normalizeDriftTemplates(templates, staff = []) {
+function normalizeDriftTemplates(templates, staff = [], fridayCycleWeeks = 8) {
   const allowedIds = new Set((Array.isArray(staff) ? staff : []).map(person => String(person.id)));
   const next = {};
   const source = templates && typeof templates === 'object' ? templates : {};
@@ -1221,11 +1286,13 @@ function normalizeDriftTemplates(templates, staff = []) {
     if (!id || !dayKey || !absentPersonId || !coverPersonId || !taskType || taskStart >= taskEnd) return;
     if (allowedIds.size > 0 && (!allowedIds.has(absentPersonId) || !allowedIds.has(coverPersonId))) return;
     const taskLabel = typeof item.taskLabel === 'string' ? item.taskLabel.trim().slice(0, 80) : '';
-    const matchKey = getDriftTemplateMatchKey(dayKey, absentPersonId, { type: taskType, start: taskStart, end: taskEnd });
+    const fridayWeek = dayKey === 'fri' ? getFridayAssignmentWeekKey(item.fridayWeek || 1, fridayCycleWeeks) : null;
+    const matchKey = getDriftTemplateMatchKey(dayKey, absentPersonId, { type: taskType, start: taskStart, end: taskEnd }, { fridayWeek, cycleWeeks: fridayCycleWeeks });
     if (!matchKey) return;
     next[id] = {
       id,
       dayKey,
+      fridayWeek,
       absentPersonId,
       coverPersonId,
       taskType,
@@ -1238,18 +1305,18 @@ function normalizeDriftTemplates(templates, staff = []) {
   });
   return next;
 }
-function findDriftTemplateForTask(templates, dayKey, absentPersonId, task) {
-  const matchKey = getDriftTemplateMatchKey(dayKey, absentPersonId, task);
+function findDriftTemplateForTask(templates, dayKey, absentPersonId, task, options = {}) {
+  const matchKey = getDriftTemplateMatchKey(dayKey, absentPersonId, task, options);
   if (!matchKey) return null;
   return Object.values(templates || {}).find(template => template?.matchKey === matchKey) || null;
 }
-function normalizeDriftState(state, staff = []) {
+function normalizeDriftState(state, staff = [], fridayCycleWeeks = 8) {
   const dayKey = ALL_DAY_KEYS.includes(state?.dayKey) ? state.dayKey : initialDriftState.dayKey;
   return {
     dayKey,
-    absences: normalizeDriftAbsences(state?.absences, staff),
-    solutions: normalizeDriftSolutions(state?.solutions, staff),
-    templates: normalizeDriftTemplates(state?.templates, staff),
+    absences: normalizeDriftAbsences(state?.absences, staff, fridayCycleWeeks),
+    solutions: normalizeDriftSolutions(state?.solutions, staff, fridayCycleWeeks),
+    templates: normalizeDriftTemplates(state?.templates, staff, fridayCycleWeeks),
   };
 }
 function normalizeAssignmentWindows(config, departments = [], coverageBlocks = []) {
@@ -1279,8 +1346,17 @@ function normalizeAssignmentWindows(config, departments = [], coverageBlocks = [
     deptWindows,
   };
 }
-function getAssignmentsForDay(assignments, personId, dayKey) {
-  return sortAssignments(assignments?.[String(personId)]?.[dayKey] || []);
+function getAssignmentsForDay(assignments, personId, dayKey, options = {}) {
+  const dayValue = assignments?.[String(personId)]?.[dayKey];
+  if (dayKey === 'fri') {
+    if (Array.isArray(dayValue)) return sortAssignments(dayValue);
+    const weeks = dayValue && typeof dayValue === 'object'
+      ? (dayValue.weeks && typeof dayValue.weeks === 'object' ? dayValue.weeks : dayValue)
+      : {};
+    const weekKey = getFridayAssignmentWeekKey(options.fridayWeek || 1, options.cycleWeeks || 8);
+    return sortAssignments(Array.isArray(weeks[weekKey]) ? weeks[weekKey] : []);
+  }
+  return sortAssignments(Array.isArray(dayValue) ? dayValue : []);
 }
 function getPreviousDayKey(dayKey) {
   const idx = DAY_META.findIndex(day => day.key === dayKey);
@@ -1343,7 +1419,7 @@ function getBaseActivitySegments(person, shift, assignmentWindows) {
   if (cursor < shiftEnd) segments.push({ kind: 'school', label: 'Skoldel', start: cursor, end: shiftEnd });
   return segments.filter(segment => segment.end > segment.start);
 }
-function replaceAssignmentsForDay(assignments, personId, dayKey, nextList, staff = []) {
+function replaceAssignmentsForDay(assignments, personId, dayKey, nextList, staff = [], options = {}) {
   const key = String(personId);
   const allowedStaffIds = new Set((Array.isArray(staff) ? staff : []).map(person => String(person.id)));
   const normalized = sortAssignments((Array.isArray(nextList) ? nextList : [])
@@ -1351,7 +1427,14 @@ function replaceAssignmentsForDay(assignments, personId, dayKey, nextList, staff
     .filter(Boolean));
   const next = { ...(assignments || {}) };
   const personMap = { ...(next[key] || {}) };
-  if (normalized.length > 0) personMap[dayKey] = normalized;
+  if (dayKey === 'fri') {
+    const weekKey = getFridayAssignmentWeekKey(options.fridayWeek || 1, options.cycleWeeks || 8);
+    const weeks = normalizeFridayAssignmentWeeks(personMap.fri, staff, key, options.cycleWeeks || 8);
+    if (normalized.length > 0) weeks[weekKey] = normalized;
+    else delete weeks[weekKey];
+    if (Object.keys(weeks).length > 0) personMap.fri = { weeks };
+    else delete personMap.fri;
+  } else if (normalized.length > 0) personMap[dayKey] = normalized;
   else delete personMap[dayKey];
   if (Object.keys(personMap).length > 0) next[key] = personMap;
   else delete next[key];
@@ -1558,7 +1641,7 @@ function buildReplacementCandidates(staff, assignments, dayKey, intervalStart, i
     const shiftStart = timeToMin(shift[0]);
     const shiftEnd = timeToMin(shift[1]);
     if (shiftStart > intervalStart || shiftEnd < intervalEnd) return null;
-    const dayTasks = getAssignmentsForDay(assignments, person.id, dayKey);
+    const dayTasks = getAssignmentsForDay(assignments, person.id, dayKey, options);
     const overlapping = dayTasks
       .filter(task => intervalsOverlap(task.start, task.end, intervalStart, intervalEnd));
     const insights = buildReplacementInsights({
@@ -3045,9 +3128,9 @@ function FritidsSchemaApp() {
           if (data.departments) setDepartments(loadedDepartments);
           if (data.coverageBlocks) setCoverageBlocks(normalizeCoverageBlocks(data.coverageBlocks, loadedDepartments));
           setPassBank(normalizePassBank(data.passBank || initialPassBank));
-          setAssignments(normalizeAssignmentsMap(data.assignments || initialAssignments, normalizedStaff));
+          setAssignments(normalizeAssignmentsMap(data.assignments || initialAssignments, normalizedStaff, data.fridayCycleWeeks || 8));
           setAssignmentWindows(normalizeAssignmentWindows(data.assignmentWindows || initialAssignmentWindows, loadedDepartments, normalizeCoverageBlocks(data.coverageBlocks || initialCoverageBlocks, loadedDepartments)));
-          setDriftState(normalizeDriftState(data.driftState || initialDriftState, normalizedStaff));
+          setDriftState(normalizeDriftState(data.driftState || initialDriftState, normalizedStaff, data.fridayCycleWeeks || 8));
           if (data.fridayCycleWeeks) setFridayCycleWeeksRaw(data.fridayCycleWeeks);
           setFridayTemplateRotation(resizeRotation(data.fridayTemplateRotation, data.fridayCycleWeeks || 8));
           if (data.savedFileName) setSavedFileName(data.savedFileName);
@@ -3101,7 +3184,7 @@ function FritidsSchemaApp() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         staff: normalizeStaffList(staff, fridayCycleWeeks),
-        departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff), fridayCycleWeeks, fridayTemplateRotation, savedFileName, workflowMode,
+        departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, savedFileName, workflowMode,
       }));
       localStorage.setItem(WORKFLOW_MODE_STORAGE_KEY, workflowMode);
     } catch {}
@@ -3110,10 +3193,10 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 9,
+    version: 11,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
-    departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
+    departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
     // Snapshot av staff från senaste utgångspunkt – används av schemavyn
     // för att visa vad som ändrats manuellt sedan generering/inläsning.
     baselineStaff: baselineStaff ? normalizeStaffList(baselineStaff, fridayCycleWeeks) : null,
@@ -3224,9 +3307,9 @@ function FritidsSchemaApp() {
         setDepartments(loadedDepartments);
         setCoverageBlocks(normalizeCoverageBlocks(data.coverageBlocks || initialCoverageBlocks, loadedDepartments));
         setPassBank(normalizePassBank(data.passBank || initialPassBank));
-        setAssignments(normalizeAssignmentsMap(data.assignments || initialAssignments, normalizedStaff));
+        setAssignments(normalizeAssignmentsMap(data.assignments || initialAssignments, normalizedStaff, data.fridayCycleWeeks || 8));
         setAssignmentWindows(normalizeAssignmentWindows(data.assignmentWindows || initialAssignmentWindows, loadedDepartments, normalizeCoverageBlocks(data.coverageBlocks || initialCoverageBlocks, loadedDepartments)));
-        setDriftState(normalizeDriftState(data.driftState || initialDriftState, normalizedStaff));
+        setDriftState(normalizeDriftState(data.driftState || initialDriftState, normalizedStaff, data.fridayCycleWeeks || 8));
         setFridayCycleWeeksRaw(data.fridayCycleWeeks || 8);
         setFridayTemplateRotation(resizeRotation(data.fridayTemplateRotation, data.fridayCycleWeeks || 8));
         if (normalizedStaff.length > 0) nextId = Math.max(...normalizedStaff.map(p => p.id), 99) + 1;
@@ -3268,9 +3351,9 @@ function FritidsSchemaApp() {
     setDepartments(scenario.departments);
     setCoverageBlocks(normalizeCoverageBlocks(scenario.coverageBlocks, scenario.departments));
     setPassBank(normalizePassBank(scenario.passBank || initialPassBank));
-    setAssignments(normalizeAssignmentsMap(scenario.assignments || initialAssignments, normalizedStaff));
+    setAssignments(normalizeAssignmentsMap(scenario.assignments || initialAssignments, normalizedStaff, fridayCycleWeeks));
     setAssignmentWindows(normalizeAssignmentWindows(scenario.assignmentWindows || initialAssignmentWindows, scenario.departments, normalizeCoverageBlocks(scenario.coverageBlocks, scenario.departments)));
-    setDriftState(normalizeDriftState(initialDriftState, normalizedStaff));
+    setDriftState(normalizeDriftState(initialDriftState, normalizedStaff, fridayCycleWeeks));
     setFridayCycleWeeksRaw(scenario.fridayCycleWeeks);
     setFridayTemplateRotation(resizeRotation(scenario.fridayTemplateRotation, scenario.fridayCycleWeeks));
     setCurrentFridayWeek(1);
@@ -3288,7 +3371,7 @@ function FritidsSchemaApp() {
     setBaselineStaff(null);
     setAssignments({});
     setAssignmentWindows(normalizeAssignmentWindows(initialAssignmentWindows, departments, normalizedCoverageBlocks));
-    setDriftState(normalizeDriftState(initialDriftState, []));
+    setDriftState(normalizeDriftState(initialDriftState, [], fridayCycleWeeks));
   };
   const openAssignmentEditor = (personId, dayKey) => setAssignmentEditor({ personId, dayKey });
   const saveAssignmentsForDay = (personId, dayKey, nextList, copyDayKeys = [], copyPersonIds = []) => {
@@ -3298,13 +3381,17 @@ function FritidsSchemaApp() {
       fridayTemplateRotation,
     };
     setAssignments(prev => {
-      let next = replaceAssignmentsForDay(prev, personId, dayKey, nextList, staff);
+      let next = replaceAssignmentsForDay(prev, personId, dayKey, nextList, staff, fridayOptions);
       (Array.isArray(copyDayKeys) ? copyDayKeys : []).forEach(copyDayKey => {
         const clonedList = (Array.isArray(nextList) ? nextList : []).map(task => ({
           ...task,
           id: createAssignmentId(),
         }));
-        next = replaceAssignmentsForDay(next, personId, copyDayKey, clonedList, staff);
+        next = replaceAssignmentsForDay(next, personId, copyDayKey, clonedList, staff, {
+          fridayWeek: copyDayKey === 'fri' ? currentFridayWeek : 1,
+          cycleWeeks: fridayCycleWeeks,
+          fridayTemplateRotation,
+        });
       });
       (Array.isArray(copyPersonIds) ? copyPersonIds : []).forEach(copyPersonId => {
         const target = staff.find(member => String(member.id) === String(copyPersonId));
@@ -3315,7 +3402,7 @@ function FritidsSchemaApp() {
           ...task,
           id: createAssignmentId(),
         }));
-        next = replaceAssignmentsForDay(next, target.id, dayKey, clonedList, staff);
+        next = replaceAssignmentsForDay(next, target.id, dayKey, clonedList, staff, fridayOptions);
       });
       return next;
     });
@@ -3664,7 +3751,7 @@ function FritidsSchemaApp() {
             <OwlMark size={36} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v59</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v61</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -3806,14 +3893,14 @@ function FritidsSchemaApp() {
         {view === 'staff' && <StaffView staff={staff} fridayCycleWeeks={fridayCycleWeeks} fridayTemplateRotation={fridayTemplateRotation} violations={violations} onEdit={setEditingId} onAdd={addStaff}
           onLoadExample={loadExample} departments={departments} />}
         {view === 'tasks' && <AssignmentsView staff={staff} departments={departments} assignments={assignments} assignmentWindows={normalizedAssignmentWindows} setAssignmentWindows={setAssignmentWindows} activeDay={assignmentDay} setActiveDay={setAssignmentDay}
-          fridayCycleWeeks={fridayCycleWeeks} fridayTemplateRotation={fridayTemplateRotation} currentFridayWeek={currentFridayWeek}
+          fridayCycleWeeks={fridayCycleWeeks} fridayTemplateRotation={fridayTemplateRotation} currentFridayWeek={currentFridayWeek} setCurrentFridayWeek={setCurrentFridayWeek}
           onEditAssignment={openAssignmentEditor} />}
         {view === 'drift' && <DriftView
           staff={staff}
           departments={departments}
           assignments={assignments}
           coverageScopes={coverageScopes}
-          driftState={normalizeDriftState(driftState, staff)}
+          driftState={normalizeDriftState(driftState, staff, fridayCycleWeeks)}
           setDriftState={setDriftState}
           fridayCycleWeeks={fridayCycleWeeks}
           fridayTemplateRotation={fridayTemplateRotation}
@@ -3854,7 +3941,7 @@ function FritidsSchemaApp() {
 
       {assignmentEditor && (
         <AssignmentEditorModal
-          key={`${assignmentEditor.personId}-${assignmentEditor.dayKey}`}
+          key={`${assignmentEditor.personId}-${assignmentEditor.dayKey}-${assignmentEditor.dayKey === 'fri' ? currentFridayWeek : 1}`}
           person={staff.find(s => s.id === assignmentEditor.personId)}
           staff={staff}
           assignments={assignments}
@@ -3867,10 +3954,16 @@ function FritidsSchemaApp() {
             cycleWeeks: fridayCycleWeeks,
             fridayTemplateRotation,
           })}
-          tasks={getAssignmentsForDay(assignments, assignmentEditor.personId, assignmentEditor.dayKey)}
+          tasks={getAssignmentsForDay(assignments, assignmentEditor.personId, assignmentEditor.dayKey, {
+            fridayWeek: currentFridayWeek,
+            cycleWeeks: fridayCycleWeeks,
+          })}
           previousTasks={(() => {
             const prevDayKey = getPreviousDayKey(assignmentEditor.dayKey);
-            return prevDayKey ? getAssignmentsForDay(assignments, assignmentEditor.personId, prevDayKey) : [];
+            return prevDayKey ? getAssignmentsForDay(assignments, assignmentEditor.personId, prevDayKey, {
+              fridayWeek: prevDayKey === 'fri' ? currentFridayWeek : 1,
+              cycleWeeks: fridayCycleWeeks,
+            }) : [];
           })()}
           onSave={(nextList, copyDayKeys = [], copyPersonIds = []) => saveAssignmentsForDay(assignmentEditor.personId, assignmentEditor.dayKey, nextList, copyDayKeys, copyPersonIds)}
           onClose={() => setAssignmentEditor(null)}
@@ -5358,7 +5451,7 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
   );
 }
 
-function AssignmentsView({ staff, departments, assignments, assignmentWindows, setAssignmentWindows, activeDay, setActiveDay, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, onEditAssignment }) {
+function AssignmentsView({ staff, departments, assignments, assignmentWindows, setAssignmentWindows, activeDay, setActiveDay, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, setCurrentFridayWeek, onEditAssignment }) {
   const [staffQuery, setStaffQuery] = useState('');
   if (staff.length === 0) {
     return (
@@ -5378,7 +5471,10 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
       cycleWeeks: fridayCycleWeeks,
       fridayTemplateRotation,
     });
-    const tasks = getAssignmentsForDay(assignments, person.id, activeDay);
+    const tasks = getAssignmentsForDay(assignments, person.id, activeDay, {
+      fridayWeek: currentFridayWeekSafe(activeDay),
+      cycleWeeks: fridayCycleWeeks,
+    });
     const issues = collectAssignmentIssues(tasks, shift);
     const shiftStart = shift ? timeToMin(shift[0]) : null;
     const baseSegments = getBaseActivitySegments(person, shift, assignmentWindows);
@@ -5506,7 +5602,28 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
             <h2 className="display-font text-xl text-stone-800">Uppdrag under dagen</h2>
             <p className="text-sm text-stone-500 mt-0.5">Välj dag och klicka sedan på en person för att lägga in dagens innehåll inom arbetspasset.</p>
             {activeDay === 'fri' && (
-              <p className="text-xs text-stone-400 mt-1">Visar fredag vecka {currentFridayWeek}. Byt vecka i Vecka-fliken om du vill se en annan fredag i rullen.</p>
+              <div className="flex items-center gap-2 flex-wrap mt-2">
+                <p className="text-xs text-stone-500">Visar fredagsuppdrag vecka {currentFridayWeek} av {fridayCycleWeeks}.</p>
+                <div className="inline-flex items-center gap-1 bg-stone-50 ring-1 ring-stone-200 rounded-full px-1 py-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentFridayWeek?.(w => ((w - 2 + fridayCycleWeeks) % fridayCycleWeeks) + 1)}
+                    className="w-6 h-6 rounded-full text-stone-600 hover:bg-white transition"
+                    title="Föregående fredagsvecka"
+                  >
+                    ‹
+                  </button>
+                  <span className="text-xs tabular-nums text-stone-700 px-1">v.{currentFridayWeek}</span>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentFridayWeek?.(w => (w % fridayCycleWeeks) + 1)}
+                    className="w-6 h-6 rounded-full text-stone-600 hover:bg-white transition"
+                    title="Nästa fredagsvecka"
+                  >
+                    ›
+                  </button>
+                </div>
+              </div>
             )}
           </div>
           <div className="flex gap-2 flex-wrap">
@@ -5791,10 +5908,13 @@ function DriftView({
   const dayKey = ALL_DAY_KEYS.includes(driftState?.dayKey) ? driftState.dayKey : 'mon';
   const fridayWeek = dayKey === 'fri' ? currentFridayWeek : 1;
   const fridayOptions = { fridayWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation };
-  const absentIds = Array.isArray(driftState?.absences?.[dayKey]) ? driftState.absences[dayKey] : [];
+  const driftStateKey = getDriftStateKey(dayKey, fridayWeek, fridayCycleWeeks);
+  const dayAbsences = readDriftDayBucket(driftState?.absences, dayKey, fridayWeek, fridayCycleWeeks);
+  const absentIds = Array.isArray(dayAbsences) ? dayAbsences : [];
   const absentSet = new Set(absentIds.map(id => String(id)));
-  const daySolutions = driftState?.solutions?.[dayKey] && typeof driftState.solutions[dayKey] === 'object'
-    ? driftState.solutions[dayKey]
+  const scopedDaySolutions = readDriftDayBucket(driftState?.solutions, dayKey, fridayWeek, fridayCycleWeeks);
+  const daySolutions = scopedDaySolutions && typeof scopedDaySolutions === 'object'
+    ? scopedDaySolutions
     : {};
   const driftTemplates = driftState?.templates && typeof driftState.templates === 'object'
     ? driftState.templates
@@ -5803,7 +5923,7 @@ function DriftView({
   const rows = useMemo(() => (
     staff.map(person => {
       const shift = getShiftForDay(person, dayKey, fridayOptions);
-      const tasks = getAssignmentsForDay(assignments, person.id, dayKey);
+      const tasks = getAssignmentsForDay(assignments, person.id, dayKey, fridayOptions);
       const dept = getDept(person.deptId, departments);
       const coverTaskCount = tasks.filter(task => task.mustCover).length;
       const boundaryTaskCount = tasks.filter(task => assignmentIsBoundaryType(task.type)).length;
@@ -5877,13 +5997,15 @@ function DriftView({
   const resolveCoverTask = (task, absentPerson, coverPersonId) => {
     setDriftState(prev => {
       const taskId = String(task.id);
+      const previousSolutions = (prev && prev.solutions && typeof prev.solutions === 'object') ? prev.solutions : {};
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
         solutions: {
-          ...((prev && prev.solutions) || {}),
-          [dayKey]: {
-            ...((prev && prev.solutions && prev.solutions[dayKey]) || {}),
+          ...previousSolutions,
+          ...(dayKey === 'fri' ? { fri: undefined } : {}),
+          [driftStateKey]: {
+            ...(readDriftDayBucket(previousSolutions, dayKey, fridayWeek, fridayCycleWeeks) || {}),
             [taskId]: {
               taskId,
               absentPersonId: String(absentPerson.id),
@@ -5892,27 +6014,29 @@ function DriftView({
             },
           },
         },
-      }, staff);
+      }, staff, fridayCycleWeeks);
     });
   };
 
   const clearCoverTaskSolution = (taskId) => {
     setDriftState(prev => {
-      const nextDaySolutions = { ...((prev && prev.solutions && prev.solutions[dayKey]) || {}) };
+      const previousSolutions = (prev && prev.solutions && typeof prev.solutions === 'object') ? prev.solutions : {};
+      const nextDaySolutions = { ...(readDriftDayBucket(previousSolutions, dayKey, fridayWeek, fridayCycleWeeks) || {}) };
       delete nextDaySolutions[String(taskId)];
-      const nextSolutions = { ...((prev && prev.solutions) || {}) };
-      if (Object.keys(nextDaySolutions).length > 0) nextSolutions[dayKey] = nextDaySolutions;
-      else delete nextSolutions[dayKey];
+      const nextSolutions = { ...previousSolutions };
+      if (dayKey === 'fri') delete nextSolutions.fri;
+      if (Object.keys(nextDaySolutions).length > 0) nextSolutions[driftStateKey] = nextDaySolutions;
+      else delete nextSolutions[driftStateKey];
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
         solutions: nextSolutions,
-      }, staff);
+      }, staff, fridayCycleWeeks);
     });
   };
 
   const saveDriftTemplate = (task, absentPerson, coverPersonId) => {
-    const matchKey = getDriftTemplateMatchKey(dayKey, absentPerson?.id, task);
+    const matchKey = getDriftTemplateMatchKey(dayKey, absentPerson?.id, task, fridayOptions);
     if (!matchKey) return;
     setDriftState(prev => {
       const currentTemplates = (prev && prev.templates && typeof prev.templates === 'object') ? prev.templates : {};
@@ -5926,6 +6050,7 @@ function DriftView({
           [id]: {
             id,
             dayKey,
+            fridayWeek: dayKey === 'fri' ? fridayWeek : null,
             absentPersonId: String(absentPerson.id),
             coverPersonId: String(coverPersonId),
             taskType: task.type,
@@ -5936,7 +6061,7 @@ function DriftView({
             savedAt: new Date().toISOString(),
           },
         },
-      }, staff);
+      }, staff, fridayCycleWeeks);
     });
   };
 
@@ -5948,50 +6073,59 @@ function DriftView({
         ...(prev || initialDriftState),
         dayKey,
         templates: nextTemplates,
-      }, staff);
+      }, staff, fridayCycleWeeks);
     });
   };
 
   const toggleAbsent = (personId) => {
     setDriftState(prev => {
-      const currentDay = Array.isArray(prev?.absences?.[dayKey]) ? prev.absences[dayKey] : [];
+      const previousAbsences = (prev && prev.absences && typeof prev.absences === 'object') ? prev.absences : {};
+      const currentDayBucket = readDriftDayBucket(previousAbsences, dayKey, fridayWeek, fridayCycleWeeks);
+      const currentDay = Array.isArray(currentDayBucket) ? currentDayBucket : [];
       const id = String(personId);
       const nextDay = currentDay.includes(id)
         ? currentDay.filter(existingId => existingId !== id)
         : [...currentDay, id];
       const nextSolutions = { ...((prev && prev.solutions) || {}) };
-      if (currentDay.includes(id) && nextSolutions[dayKey]) {
+      if (currentDay.includes(id) && readDriftDayBucket(nextSolutions, dayKey, fridayWeek, fridayCycleWeeks)) {
+        const currentSolutions = readDriftDayBucket(nextSolutions, dayKey, fridayWeek, fridayCycleWeeks) || {};
         const kept = Object.fromEntries(
-          Object.entries(nextSolutions[dayKey]).filter(([, solution]) => String(solution.absentPersonId) !== id)
+          Object.entries(currentSolutions).filter(([, solution]) => String(solution.absentPersonId) !== id)
         );
-        if (Object.keys(kept).length > 0) nextSolutions[dayKey] = kept;
-        else delete nextSolutions[dayKey];
+        if (dayKey === 'fri') delete nextSolutions.fri;
+        if (Object.keys(kept).length > 0) nextSolutions[driftStateKey] = kept;
+        else delete nextSolutions[driftStateKey];
       }
+      const nextAbsences = { ...previousAbsences };
+      if (dayKey === 'fri') delete nextAbsences.fri;
+      if (nextDay.length > 0) nextAbsences[driftStateKey] = nextDay;
+      else delete nextAbsences[driftStateKey];
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
-        absences: {
-          ...((prev && prev.absences) || {}),
-          [dayKey]: nextDay,
-        },
+        absences: nextAbsences,
         solutions: nextSolutions,
-      }, staff);
+      }, staff, fridayCycleWeeks);
     });
   };
 
   const clearAbsences = () => {
-    setDriftState(prev => normalizeDriftState({
-      ...(prev || initialDriftState),
-      dayKey,
-      absences: {
-        ...((prev && prev.absences) || {}),
-        [dayKey]: [],
-      },
-      solutions: {
-        ...((prev && prev.solutions) || {}),
-        [dayKey]: {},
-      },
-    }, staff));
+    setDriftState(prev => {
+      const nextAbsences = { ...((prev && prev.absences) || {}) };
+      const nextSolutions = { ...((prev && prev.solutions) || {}) };
+      if (dayKey === 'fri') {
+        delete nextAbsences.fri;
+        delete nextSolutions.fri;
+      }
+      delete nextAbsences[driftStateKey];
+      delete nextSolutions[driftStateKey];
+      return normalizeDriftState({
+        ...(prev || initialDriftState),
+        dayKey,
+        absences: nextAbsences,
+        solutions: nextSolutions,
+      }, staff, fridayCycleWeeks);
+    });
   };
 
   const setDayKey = (nextDayKey) => setDriftState(prev => normalizeDriftState({
@@ -5999,7 +6133,7 @@ function DriftView({
     dayKey: nextDayKey,
     absences: (prev && prev.absences) || {},
     solutions: (prev && prev.solutions) || {},
-  }, staff));
+  }, staff, fridayCycleWeeks));
 
   if (staff.length === 0) {
     return (
@@ -6023,7 +6157,7 @@ function DriftView({
   const activeDayIndex = Math.max(0, DAY_META.findIndex(day => day.key === dayKey));
   const activeDateLabel = formatDayMonth(driftWeekDates[activeDayIndex]);
   const dayDriftTemplates = Object.values(driftTemplates)
-    .filter(template => template.dayKey === dayKey)
+    .filter(template => template.dayKey === dayKey && (dayKey !== 'fri' || String(template.fridayWeek || 1) === String(fridayWeek)))
     .sort((a, b) => {
       if (a.taskStart !== b.taskStart) return a.taskStart - b.taskStart;
       const aAbsent = staff.find(person => String(person.id) === String(a.absentPersonId))?.name || '';
@@ -6158,7 +6292,7 @@ function DriftView({
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div>
                     <div className="text-[10px] uppercase tracking-wider font-semibold text-stone-500">Sparade driftmallar</div>
-                    <div className="text-[11px] text-stone-500">Återanvändbara lösningar för {dayLabel.toLowerCase()}.</div>
+                    <div className="text-[11px] text-stone-500">Återanvändbara lösningar för {dayLabel.toLowerCase()}{dayKey === 'fri' ? ` v.${fridayWeek}` : ''}.</div>
                   </div>
                   <span className="text-[11px] text-stone-500 bg-white rounded-full px-2 py-0.5 ring-1 ring-stone-200">{dayDriftTemplates.length}</span>
                 </div>
@@ -6199,7 +6333,7 @@ function DriftView({
             )}
             {openCoverTasks.map(({ person, dept, task, candidates }) => {
               const meta = getAssignmentTypeMeta(task.type);
-              const savedTemplate = findDriftTemplateForTask(driftTemplates, dayKey, person.id, task);
+              const savedTemplate = findDriftTemplateForTask(driftTemplates, dayKey, person.id, task, fridayOptions);
               const savedCover = savedTemplate
                 ? staff.find(member => String(member.id) === String(savedTemplate.coverPersonId))
                 : null;
@@ -6358,7 +6492,7 @@ function DriftView({
               const cover = staff.find(member => String(member.id) === String(solution.coverPersonId));
               const coverDept = cover ? getDept(cover.deptId, departments) : null;
               const meta = getAssignmentTypeMeta(task.type);
-              const savedTemplate = findDriftTemplateForTask(driftTemplates, dayKey, person.id, task);
+              const savedTemplate = findDriftTemplateForTask(driftTemplates, dayKey, person.id, task, fridayOptions);
               const sameSavedTemplate = savedTemplate && String(savedTemplate.coverPersonId) === String(solution.coverPersonId);
               const selectedCandidate = [...(candidates.free || []), ...(candidates.busy || [])]
                 .find(candidate => String(candidate.person.id) === String(solution.coverPersonId));
@@ -6596,8 +6730,11 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
   );
   const selectedCopySource = replacementOptions.find(option => String(option.id) === String(copyFromPersonId)) || null;
   const copySourceTasks = useMemo(
-    () => selectedCopySource ? getAssignmentsForDay(assignments, selectedCopySource.id, dayKey) : [],
-    [selectedCopySource, assignments, dayKey]
+    () => selectedCopySource ? getAssignmentsForDay(assignments, selectedCopySource.id, dayKey, {
+      fridayWeek: dayKey === 'fri' ? currentFridayWeek : 1,
+      cycleWeeks: fridayCycleWeeks,
+    }) : [],
+    [selectedCopySource, assignments, dayKey, currentFridayWeek, fridayCycleWeeks]
   );
   const copyToPersonOptions = useMemo(
     () => replacementOptions.filter(option => !!getShiftForDay(option, dayKey, {
