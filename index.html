@@ -319,7 +319,7 @@ const ASSIGNMENT_TEMPLATES = [
   { id: 'meeting-30', type: 'meeting', label: 'Möte 30 min', duration: 30 },
 ];
 const initialAssignments = {};
-const initialDriftState = { dayKey: 'mon', absences: {}, solutions: {} };
+const initialDriftState = { dayKey: 'mon', absences: {}, solutions: {}, templates: {} };
 const WORKFLOW_MODE_GENERATE = 'generate';
 const WORKFLOW_MODE_EXISTING = 'existing';
 const APP_NAV_ITEMS = [
@@ -422,6 +422,9 @@ function getAssignmentTypeMeta(typeId) {
 
 function createAssignmentId() {
   return `asg-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
+}
+function createDriftTemplateId() {
+  return `drift-template-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
 }
 
 function inferAssignmentLabel(typeId) {
@@ -1193,12 +1196,60 @@ function normalizeDriftSolutions(solutions, staff = []) {
   });
   return next;
 }
+function getDriftTemplateMatchKey(dayKey, absentPersonId, task) {
+  if (!ALL_DAY_KEYS.includes(dayKey) || !task) return '';
+  const cleanAbsentId = String(absentPersonId || '').trim();
+  const taskType = ASSIGNMENT_TYPE_IDS.includes(task.type) ? task.type : '';
+  const taskStart = asNumber(task.start, null);
+  const taskEnd = asNumber(task.end, null);
+  if (!cleanAbsentId || !taskType || taskStart == null || taskEnd == null || taskStart >= taskEnd) return '';
+  return [dayKey, cleanAbsentId, taskType, roundToStep(taskStart), roundToStep(taskEnd)].join('|');
+}
+function normalizeDriftTemplates(templates, staff = []) {
+  const allowedIds = new Set((Array.isArray(staff) ? staff : []).map(person => String(person.id)));
+  const next = {};
+  const source = templates && typeof templates === 'object' ? templates : {};
+  Object.entries(source).forEach(([templateId, item]) => {
+    if (!item || typeof item !== 'object') return;
+    const id = String(item.id || templateId || '').trim();
+    const dayKey = ALL_DAY_KEYS.includes(item.dayKey) ? item.dayKey : '';
+    const absentPersonId = String(item.absentPersonId || '').trim();
+    const coverPersonId = String(item.coverPersonId || '').trim();
+    const taskType = ASSIGNMENT_TYPE_IDS.includes(item.taskType) ? item.taskType : '';
+    const taskStart = clamp(roundToStep(asNumber(item.taskStart, -1)), 0, 24 * 60);
+    const taskEnd = clamp(roundToStep(asNumber(item.taskEnd, -1)), 0, 24 * 60);
+    if (!id || !dayKey || !absentPersonId || !coverPersonId || !taskType || taskStart >= taskEnd) return;
+    if (allowedIds.size > 0 && (!allowedIds.has(absentPersonId) || !allowedIds.has(coverPersonId))) return;
+    const taskLabel = typeof item.taskLabel === 'string' ? item.taskLabel.trim().slice(0, 80) : '';
+    const matchKey = getDriftTemplateMatchKey(dayKey, absentPersonId, { type: taskType, start: taskStart, end: taskEnd });
+    if (!matchKey) return;
+    next[id] = {
+      id,
+      dayKey,
+      absentPersonId,
+      coverPersonId,
+      taskType,
+      taskLabel,
+      taskStart,
+      taskEnd,
+      matchKey,
+      savedAt: typeof item.savedAt === 'string' ? item.savedAt : '',
+    };
+  });
+  return next;
+}
+function findDriftTemplateForTask(templates, dayKey, absentPersonId, task) {
+  const matchKey = getDriftTemplateMatchKey(dayKey, absentPersonId, task);
+  if (!matchKey) return null;
+  return Object.values(templates || {}).find(template => template?.matchKey === matchKey) || null;
+}
 function normalizeDriftState(state, staff = []) {
   const dayKey = ALL_DAY_KEYS.includes(state?.dayKey) ? state.dayKey : initialDriftState.dayKey;
   return {
     dayKey,
     absences: normalizeDriftAbsences(state?.absences, staff),
     solutions: normalizeDriftSolutions(state?.solutions, staff),
+    templates: normalizeDriftTemplates(state?.templates, staff),
   };
 }
 function normalizeAssignmentWindows(config, departments = [], coverageBlocks = []) {
@@ -3059,7 +3110,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 8,
+    version: 9,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3613,7 +3664,7 @@ function FritidsSchemaApp() {
             <OwlMark size={36} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v57</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v59</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4843,39 +4894,41 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
       <TabIntro>
         Här ser du schemat per dag och hur bemanningen ser ut över tiden. Du kan antingen låta generatorn pussla fram förslag eller <strong>klicka på en stapel och skriva in tider manuellt</strong> om du redan har ett schema. Veckotimmarna räknas om medan du skriver, och manuella ändringar markeras så du kan ångra dem. Växla mellan gemensam bemanning och avdelningar för att se varje del av fritids. Om något inte går ihop visas brist- och övermaxlistor här. Knappen uppe till höger skriver ut hela veckan som PDF.
       </TabIntro>
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex gap-2 flex-wrap">
-          {DAYS.map(d => (
-            <button key={d.key} onClick={() => setActiveDay(d.key)}
-              className={`px-4 py-2 rounded-lg text-sm transition ${activeDay === d.key ? 'bg-stone-800 text-white' : 'bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50'}`}>
-              {d.label}
+      <div className="sticky top-[72px] z-20 -mx-2 rounded-2xl bg-[#FBF8F4]/95 px-2 py-2 shadow-sm ring-1 ring-stone-200/70 backdrop-blur">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex gap-2 flex-wrap">
+            {DAYS.map(d => (
+              <button key={d.key} onClick={() => setActiveDay(d.key)}
+                className={`px-4 py-2 rounded-lg text-sm transition ${activeDay === d.key ? 'bg-stone-800 text-white' : 'bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50'}`}>
+                {d.label}
+              </button>
+            ))}
+            <button key="fri" onClick={() => setActiveDay('fri')}
+              className={`px-4 py-2 rounded-lg text-sm transition ${isFriday ? 'bg-stone-800 text-white' : 'bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50'}`}>
+              Fredag
             </button>
-          ))}
-          <button key="fri" onClick={() => setActiveDay('fri')}
-            className={`px-4 py-2 rounded-lg text-sm transition ${isFriday ? 'bg-stone-800 text-white' : 'bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50'}`}>
-            Fredag
-          </button>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {isFriday && hasFridaySetup && (
-            <div className="flex items-center gap-2 bg-white ring-1 ring-stone-200 rounded-lg px-2 py-1">
-              <button onClick={() => setCurrentFridayWeek(w => ((w - 2 + fridayCycleWeeks) % fridayCycleWeeks) + 1)}
-                className="p-1 hover:bg-stone-100 rounded text-stone-600">‹</button>
-              <span className="text-sm tabular-nums text-stone-700 px-2">
-                Vecka <span className="display-font" style={{ fontWeight: 500 }}>{currentFridayWeek}</span> av {fridayCycleWeeks}
-              </span>
-              <button onClick={() => setCurrentFridayWeek(w => (w % fridayCycleWeeks) + 1)}
-                className="p-1 hover:bg-stone-100 rounded text-stone-600">›</button>
-            </div>
-          )}
-          {staffCount > 0 && (
-            <button onClick={() => window.print()}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50 transition"
-              title="Skriv ut hela veckan – välj 'Spara som PDF' i webbläsarens print-dialog för att skapa en PDF-fil">
-              <Printer size={14} />
-              Skriv ut / PDF
-            </button>
-          )}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {isFriday && hasFridaySetup && (
+              <div className="flex items-center gap-2 bg-white ring-1 ring-stone-200 rounded-lg px-2 py-1">
+                <button onClick={() => setCurrentFridayWeek(w => ((w - 2 + fridayCycleWeeks) % fridayCycleWeeks) + 1)}
+                  className="p-1 hover:bg-stone-100 rounded text-stone-600">‹</button>
+                <span className="text-sm tabular-nums text-stone-700 px-2">
+                  Vecka <span className="display-font" style={{ fontWeight: 500 }}>{currentFridayWeek}</span> av {fridayCycleWeeks}
+                </span>
+                <button onClick={() => setCurrentFridayWeek(w => (w % fridayCycleWeeks) + 1)}
+                  className="p-1 hover:bg-stone-100 rounded text-stone-600">›</button>
+              </div>
+            )}
+            {staffCount > 0 && (
+              <button onClick={() => window.print()}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50 transition"
+                title="Skriv ut hela veckan – välj 'Spara som PDF' i webbläsarens print-dialog för att skapa en PDF-fil">
+                <Printer size={14} />
+                Skriv ut / PDF
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -5743,6 +5796,9 @@ function DriftView({
   const daySolutions = driftState?.solutions?.[dayKey] && typeof driftState.solutions[dayKey] === 'object'
     ? driftState.solutions[dayKey]
     : {};
+  const driftTemplates = driftState?.templates && typeof driftState.templates === 'object'
+    ? driftState.templates
+    : {};
 
   const rows = useMemo(() => (
     staff.map(person => {
@@ -5855,6 +5911,47 @@ function DriftView({
     });
   };
 
+  const saveDriftTemplate = (task, absentPerson, coverPersonId) => {
+    const matchKey = getDriftTemplateMatchKey(dayKey, absentPerson?.id, task);
+    if (!matchKey) return;
+    setDriftState(prev => {
+      const currentTemplates = (prev && prev.templates && typeof prev.templates === 'object') ? prev.templates : {};
+      const existing = Object.values(currentTemplates).find(template => template?.matchKey === matchKey);
+      const id = existing?.id || createDriftTemplateId();
+      return normalizeDriftState({
+        ...(prev || initialDriftState),
+        dayKey,
+        templates: {
+          ...currentTemplates,
+          [id]: {
+            id,
+            dayKey,
+            absentPersonId: String(absentPerson.id),
+            coverPersonId: String(coverPersonId),
+            taskType: task.type,
+            taskLabel: task.label || inferAssignmentLabel(task.type),
+            taskStart: task.start,
+            taskEnd: task.end,
+            matchKey,
+            savedAt: new Date().toISOString(),
+          },
+        },
+      }, staff);
+    });
+  };
+
+  const removeDriftTemplate = (templateId) => {
+    setDriftState(prev => {
+      const nextTemplates = { ...((prev && prev.templates) || {}) };
+      delete nextTemplates[String(templateId)];
+      return normalizeDriftState({
+        ...(prev || initialDriftState),
+        dayKey,
+        templates: nextTemplates,
+      }, staff);
+    });
+  };
+
   const toggleAbsent = (personId) => {
     setDriftState(prev => {
       const currentDay = Array.isArray(prev?.absences?.[dayKey]) ? prev.absences[dayKey] : [];
@@ -5925,6 +6022,14 @@ function DriftView({
   const driftWeekDates = useMemo(() => DAY_META.map((_, idx) => getWeekdayDate(idx)), []);
   const activeDayIndex = Math.max(0, DAY_META.findIndex(day => day.key === dayKey));
   const activeDateLabel = formatDayMonth(driftWeekDates[activeDayIndex]);
+  const dayDriftTemplates = Object.values(driftTemplates)
+    .filter(template => template.dayKey === dayKey)
+    .sort((a, b) => {
+      if (a.taskStart !== b.taskStart) return a.taskStart - b.taskStart;
+      const aAbsent = staff.find(person => String(person.id) === String(a.absentPersonId))?.name || '';
+      const bAbsent = staff.find(person => String(person.id) === String(b.absentPersonId))?.name || '';
+      return aAbsent.localeCompare(bAbsent, 'sv');
+    });
 
   return (
     <div className="space-y-3">
@@ -6048,6 +6153,43 @@ function DriftView({
             </div>
           </div>
           <div className="p-2 overflow-y-auto" style={{ maxHeight: 540 }}>
+            {dayDriftTemplates.length > 0 && (
+              <div className="m-1 mb-2 rounded-xl bg-stone-50 p-3" style={{ boxShadow: 'inset 0 0 0 1px #E7E5E4' }}>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider font-semibold text-stone-500">Sparade driftmallar</div>
+                    <div className="text-[11px] text-stone-500">Återanvändbara lösningar för {dayLabel.toLowerCase()}.</div>
+                  </div>
+                  <span className="text-[11px] text-stone-500 bg-white rounded-full px-2 py-0.5 ring-1 ring-stone-200">{dayDriftTemplates.length}</span>
+                </div>
+                <div className="space-y-1">
+                  {dayDriftTemplates.map(template => {
+                    const absentPerson = staff.find(member => String(member.id) === String(template.absentPersonId));
+                    const coverPerson = staff.find(member => String(member.id) === String(template.coverPersonId));
+                    return (
+                      <div key={template.id} className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 ring-1 ring-stone-200">
+                        <div className="min-w-0 text-[11px] text-stone-600">
+                          <span style={{ fontWeight: 600, color: '#1C1917' }}>{absentPerson?.name || 'Person saknas'}</span>
+                          <span className="text-stone-300"> · </span>
+                          <span className="tabular-nums">{minToTime(template.taskStart)}–{minToTime(template.taskEnd)}</span>
+                          <span className="text-stone-300"> · </span>
+                          <span>{template.taskLabel || inferAssignmentLabel(template.taskType)}</span>
+                          <span className="text-stone-300"> → </span>
+                          <span style={{ fontWeight: 600, color: '#0369A1' }}>{coverPerson?.name || 'ersättare saknas'}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeDriftTemplate(template.id)}
+                          className="text-[10.5px] text-stone-500 hover:text-stone-800 rounded-full px-2 py-0.5 hover:bg-stone-100 transition shrink-0"
+                        >
+                          Ta bort
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {openCoverTasks.length === 0 && gapIssues.length === 0 && (
               <div className="px-4 py-10 text-center">
                 <CheckCircle2 size={28} className="mx-auto text-emerald-600 mb-2" />
@@ -6057,9 +6199,22 @@ function DriftView({
             )}
             {openCoverTasks.map(({ person, dept, task, candidates }) => {
               const meta = getAssignmentTypeMeta(task.type);
+              const savedTemplate = findDriftTemplateForTask(driftTemplates, dayKey, person.id, task);
+              const savedCover = savedTemplate
+                ? staff.find(member => String(member.id) === String(savedTemplate.coverPersonId))
+                : null;
+              const savedTemplateCandidate = savedTemplate
+                ? [...(candidates.free || []), ...(candidates.busy || [])]
+                    .find(candidate => String(candidate.person.id) === String(savedTemplate.coverPersonId))
+                : null;
               // Smart-sort: samma avdelning först, sedan score, sedan free vs busy
               const allCands = [...(candidates.free || []), ...(candidates.busy || [])];
               const sortedCands = allCands.slice().sort((a, b) => {
+                if (savedTemplate) {
+                  const aSaved = String(a.person.id) === String(savedTemplate.coverPersonId);
+                  const bSaved = String(b.person.id) === String(savedTemplate.coverPersonId);
+                  if (aSaved !== bSaved) return aSaved ? -1 : 1;
+                }
                 if (a.sameDept !== b.sameDept) return a.sameDept ? -1 : 1;
                 const aFree = a.overlapping.length === 0;
                 const bFree = b.overlapping.length === 0;
@@ -6090,6 +6245,35 @@ function DriftView({
                       </div>
                     </div>
                   </div>
+                  {savedTemplate && (
+                    <div className="mt-2 ml-12 rounded-lg bg-sky-50 px-3 py-2 text-[11px] text-sky-900 flex items-center justify-between gap-2 flex-wrap" style={{ boxShadow: 'inset 0 0 0 1px #BAE6FD' }}>
+                      <div className="min-w-0">
+                        <span style={{ fontWeight: 700 }}>Sparad mall:</span>{' '}
+                        {savedCover ? `${savedCover.name} brukar vara en bra lösning här.` : 'Ersättaren i mallen finns inte kvar i personalen.'}
+                        {!savedTemplateCandidate && savedCover && (
+                          <span className="text-sky-700"> Personen kan inte föreslås just nu.</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {savedTemplateCandidate && (
+                          <button
+                            type="button"
+                            onClick={() => resolveCoverTask(task, person, savedTemplate.coverPersonId)}
+                            className="rounded-full px-2 py-0.5 text-[10.5px] font-semibold bg-sky-900 text-white hover:bg-sky-950 transition"
+                          >
+                            Använd mall
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeDriftTemplate(savedTemplate.id)}
+                          className="rounded-full px-2 py-0.5 text-[10.5px] font-semibold bg-white text-sky-800 ring-1 ring-sky-200 hover:bg-sky-100 transition"
+                        >
+                          Ta bort
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {candList.length === 0 ? (
                     <div className="text-[11px] text-stone-400 italic ml-12 mt-2">Inga lämpliga personer hittades just nu.</div>
                   ) : (
@@ -6105,6 +6289,7 @@ function DriftView({
                                   : isFree ? { label: 'Ledig', color: '#475569', ring: '#E7E5E4' }
                                   : (releasable > 0 && blocking === 0) ? { label: 'Kan släppa annat', color: '#B45309', ring: '#FDE68A' }
                                   : { label: 'Konflikt', color: '#A8A29E', ring: '#E7E5E4' };
+                        const isSavedTemplateCandidate = savedTemplate && String(savedTemplate.coverPersonId) === String(cand.person.id);
                         // Build reason line
                         const reasonParts = [];
                         if (cand.preferredCoverMatch) reasonParts.push('Förstahandsersättare');
@@ -6129,6 +6314,11 @@ function DriftView({
                                 {cand.sameDept && (
                                   <span className="inline-flex items-center rounded-full px-1.5 py-0 text-[9.5px] font-semibold" style={{ background: softColor(dept.color), color: dept.color, boxShadow: `inset 0 0 0 1px ${dept.color}44` }}>
                                     samma avd
+                                  </span>
+                                )}
+                                {isSavedTemplateCandidate && (
+                                  <span className="inline-flex items-center rounded-full px-1.5 py-0 text-[9.5px] font-semibold bg-sky-50 text-sky-800 ring-1 ring-sky-200">
+                                    sparad mall
                                   </span>
                                 )}
                                 {!breakOk && (
@@ -6168,6 +6358,8 @@ function DriftView({
               const cover = staff.find(member => String(member.id) === String(solution.coverPersonId));
               const coverDept = cover ? getDept(cover.deptId, departments) : null;
               const meta = getAssignmentTypeMeta(task.type);
+              const savedTemplate = findDriftTemplateForTask(driftTemplates, dayKey, person.id, task);
+              const sameSavedTemplate = savedTemplate && String(savedTemplate.coverPersonId) === String(solution.coverPersonId);
               const selectedCandidate = [...(candidates.free || []), ...(candidates.busy || [])]
                 .find(candidate => String(candidate.person.id) === String(solution.coverPersonId));
               const releasableTasks = selectedCandidate?.releasableOverlapping || [];
@@ -6231,13 +6423,34 @@ function DriftView({
                         )}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => clearCoverTaskSolution(task.id)}
-                      className="text-[11px] text-stone-500 hover:text-stone-800 rounded-full px-2 py-1 hover:bg-white transition"
-                    >
-                      Ångra
-                    </button>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => clearCoverTaskSolution(task.id)}
+                        className="text-[11px] text-stone-500 hover:text-stone-800 rounded-full px-2 py-1 hover:bg-white transition"
+                      >
+                        Ångra
+                      </button>
+                      {cover && (
+                        sameSavedTemplate ? (
+                          <button
+                            type="button"
+                            onClick={() => removeDriftTemplate(savedTemplate.id)}
+                            className="text-[10.5px] text-sky-800 hover:text-sky-950 rounded-full px-2 py-1 bg-white/70 hover:bg-white ring-1 ring-sky-200 transition"
+                          >
+                            Ta bort mall
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => saveDriftTemplate(task, person, solution.coverPersonId)}
+                            className="text-[10.5px] text-sky-800 hover:text-sky-950 rounded-full px-2 py-1 bg-white/70 hover:bg-white ring-1 ring-sky-200 transition"
+                          >
+                            {savedTemplate ? 'Uppdatera mall' : 'Spara som mall'}
+                          </button>
+                        )
+                      )}
+                    </div>
                   </div>
                 </div>
               );
