@@ -38,7 +38,7 @@ Källkod, struktur och innehåll får inte kopieras eller spridas utan tillstån
 // Vi bygger en React-komponent som tar size/className/fill/style etc precis som lucide-react.
 (function() {
   const { createElement: h } = React;
-  const iconNames = ['AlertCircle', 'Clock', 'Users', 'Calendar', 'CheckCircle2', 'ChevronRight', 'Edit3', 'Sparkles', 'X', 'Plus', 'Trash2', 'Wand2', 'Settings', 'Download', 'Upload', 'Circle', 'HelpCircle', 'ArrowRight', 'Printer', 'Briefcase', 'Layers', 'Repeat', 'Building2', 'Menu'];
+  const iconNames = ['AlertCircle', 'Clock', 'Users', 'Calendar', 'CheckCircle2', 'ChevronRight', 'Edit3', 'Sparkles', 'X', 'Plus', 'Trash2', 'Wand2', 'Settings', 'Download', 'Upload', 'Circle', 'HelpCircle', 'ArrowRight', 'Printer', 'Briefcase', 'Layers', 'Repeat', 'Building2', 'Menu', 'Home', 'School', 'BookOpen', 'GraduationCap', 'FileSpreadsheet', 'ExternalLink'];
   const defaultSvgAttrs = {
     xmlns: 'http://www.w3.org/2000/svg',
     viewBox: '0 0 24 24',
@@ -82,7 +82,7 @@ Källkod, struktur och innehåll får inte kopieras eller spridas utan tillstån
 
 <script type="text/babel" data-presets="react">
 // Plocka ut ikon-komponenterna så att resten av koden kan använda dem direkt
-const { AlertCircle, Clock, Users, Calendar, CheckCircle2, ChevronRight, Edit3, Sparkles, X, Plus, Trash2, Wand2, Settings, Download, Upload, Circle, HelpCircle, ArrowRight, Printer, Briefcase, Layers, Repeat, Building2, Menu } = window.__icons;
+const { AlertCircle, Clock, Users, Calendar, CheckCircle2, ChevronRight, Edit3, Sparkles, X, Plus, Trash2, Wand2, Settings, Download, Upload, Circle, HelpCircle, ArrowRight, Printer, Briefcase, Layers, Repeat, Building2, Menu, Home, School, BookOpen, GraduationCap, FileSpreadsheet, ExternalLink } = window.__icons;
 const { useState, useMemo, useEffect, useRef } = React;
 
 
@@ -309,6 +309,7 @@ function getFridayWeekForDate(date, currentFridayWeek = 1, cycleWeeks = 8, baseD
 // Standardvärden för alla parametrar — gör koden nedan mer läsbar
 const DEFAULTS = {
   fullTimeHours: 37.5, percent: 100,
+  employmentRole: '',
   fixedTimes: false, onlyAfternoons: false,
   earliestStart: null, latestStart: null,
   earliestEnd: null, latestEnd: null,
@@ -336,6 +337,54 @@ const DEFAULTS = {
 
 // Hjälpfunktion: bygger en personalpost med default-värden + det man skickar in
 const P = (fields) => ({ ...DEFAULTS, ...fields });
+
+const STAFF_ROLE_OPTIONS = [
+  { id: '', label: 'Ej valt', group: 'other' },
+  { id: 'fritids_teacher', label: 'Lärare i fritidshem', group: 'fritids' },
+  { id: 'teacher', label: 'Lärare', group: 'teacher' },
+  { id: 'substitute', label: 'Vikarie', group: 'support' },
+  { id: 'extra', label: 'Extra resurs', group: 'support' },
+  { id: 'resource', label: 'Resurs', group: 'support' },
+  { id: 'samverkare', label: 'Samverkare', group: 'support' },
+  { id: 'other', label: 'Övrigt', group: 'other' },
+];
+
+function inferEmploymentRoleFromText(text) {
+  const value = String(text || '').toLowerCase();
+  if (!value.trim()) return '';
+  if (value.includes('fritids') || value.includes('fritidspedagog')) return 'fritids_teacher';
+  if (value.includes('lärare') || value.includes('larare') || value.includes('teacher') || value.includes('åk') || value.includes('ak ') || value.includes('fklass')) return 'teacher';
+  if (value.includes('vikarie')) return 'substitute';
+  if (value.includes('extra')) return 'extra';
+  if (value.includes('resurs')) return 'resource';
+  if (value.includes('samverk')) return 'samverkare';
+  return '';
+}
+
+function normalizeEmploymentRole(value, roleText = '') {
+  const raw = String(value || '').trim();
+  if (STAFF_ROLE_OPTIONS.some(option => option.id === raw)) return raw;
+  return inferEmploymentRoleFromText(roleText);
+}
+
+function getStaffRoleMeta(value) {
+  return STAFF_ROLE_OPTIONS.find(option => option.id === value) || STAFF_ROLE_OPTIONS[0];
+}
+
+function getStaffRoleLabel(value) {
+  return getStaffRoleMeta(value).label;
+}
+
+function getStaffRoleCategory(person) {
+  const normalized = normalizeEmploymentRole(person?.employmentRole, person?.role);
+  const meta = getStaffRoleMeta(normalized);
+  if (meta.group && meta.group !== 'other') return meta.group;
+  const text = `${person?.name || ''} ${person?.role || ''}`.toLowerCase();
+  if (text.includes('lärare') || text.includes('larare') || text.includes('teacher') || text.includes('åk') || text.includes('fklass')) return 'teacher';
+  if (text.includes('samverk') || text.includes('resurs') || text.includes('vikarie') || text.includes('extra')) return 'support';
+  if (text.includes('fritids') || text.includes('fritidspedagog')) return 'fritids';
+  return 'other';
+}
 
 // Tom start. Exempelscenarier kan laddas in via knapp.
 const initialStaff = [];
@@ -395,10 +444,14 @@ const initialDriftState = { dayKey: 'mon', selectedDateKey: formatDateKey(new Da
 const WORKFLOW_MODE_GENERATE = 'generate';
 const WORKFLOW_MODE_EXISTING = 'existing';
 const APP_NAV_ITEMS = [
-  // Dagligt arbete
-  { k: 'schedule', label: 'Vecka',       icon: Calendar,    group: 'daily' },
-  { k: 'drift',    label: 'Drift',       icon: AlertCircle, group: 'daily' },
-  { k: 'tasks',    label: 'Uppdrag',     icon: Briefcase,   group: 'daily' },
+  // Start
+  { k: 'home',     label: 'Hem',         icon: Home,        group: 'start' },
+  // Fritids
+  { k: 'schedule', label: 'Schemabygge', icon: Calendar,    group: 'fritids' },
+  { k: 'tasks',    label: 'Uppdrag',     icon: Briefcase,   group: 'fritids' },
+  { k: 'drift',    label: 'Drift',       icon: AlertCircle, group: 'fritids' },
+  // Skola
+  { k: 'school',   label: 'Skola',       icon: School,      group: 'school' },
   // Resurser
   { k: 'staff',    label: 'Personal',    icon: Users,       group: 'resources' },
   { k: 'passbank', label: 'Passbank',    icon: Layers,      group: 'resources' },
@@ -408,7 +461,9 @@ const APP_NAV_ITEMS = [
   { k: 'settings', label: 'Inställningar', icon: Settings,  group: 'rules' },
 ];
 const APP_NAV_GROUPS = [
-  { id: 'daily',     label: 'Arbetsdag' },
+  { id: 'start',     label: 'Start' },
+  { id: 'fritids',   label: 'Fritids' },
+  { id: 'school',    label: 'Skola' },
   { id: 'resources', label: 'Resurser' },
   { id: 'rules',     label: 'Regler & struktur' },
 ];
@@ -474,6 +529,8 @@ function getWorkflowTour(mode) {
 function getTabHelpText(tabKey, workflowMode) {
   const mode = normalizeWorkflowMode(workflowMode);
   const map = {
+    home: 'Startplatsen som guidar dig till rätt rum: schemabygge, uppdrag, drift, skola eller import/export.',
+    school: 'Här samlar vi lärarnas ramtider, undervisningspositioner, grupper och källstöd.',
     schedule: mode === WORKFLOW_MODE_EXISTING
       ? 'Här lägger du in eller justerar befintliga arbetspass direkt i veckan.'
       : 'Här granskar du schemaförslag och kan finjustera tider manuellt.',
@@ -1855,6 +1912,7 @@ function normalizePerson(person, cycleWeeks = 8) {
     ...merged,
     name: merged.name || '',
     role: merged.role || '',
+    employmentRole: normalizeEmploymentRole(merged.employmentRole, merged.role),
     deptId: merged.deptId || '',
     fullTimeHours: asNumber(merged.fullTimeHours, DEFAULTS.fullTimeHours),
     percent: asNumber(merged.percent, DEFAULTS.percent),
@@ -3162,7 +3220,7 @@ function FritidsSchemaApp() {
   const [activeDay, setActiveDay] = useState('mon');
   const [assignmentDay, setAssignmentDay] = useState('mon');
   const [driftState, setDriftState] = useState(initialDriftState);
-  const [view, setView] = useState('schedule');
+  const [view, setView] = useState('home');
   const [workflowMode, setWorkflowModeState] = useState(WORKFLOW_MODE_GENERATE);
   const [editingId, setEditingId] = useState(null);
   const [assignmentEditor, setAssignmentEditor] = useState(null);
@@ -3320,7 +3378,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 15,
+    version: 19,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3725,7 +3783,7 @@ function FritidsSchemaApp() {
       return;
     }
     const newPerson = normalizePerson(P({
-      id: nextId++, name: 'Ny anställd', deptId: departments[0].id, role: '',
+      id: nextId++, name: 'Ny anställd', deptId: departments[0].id, employmentRole: '', role: '',
       sched: {},
       allowedPassIds: [],
       fridayRotation: new Array(fridayCycleWeeks).fill(null),
@@ -3894,7 +3952,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v67</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v71</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -3934,7 +3992,7 @@ function FritidsSchemaApp() {
         <div className="flex-1 min-w-0 flex flex-col">
           <header className="bg-white border-b border-stone-200 px-6 py-3 flex items-center justify-between gap-3 flex-wrap sticky top-0 z-30">
             <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-widest text-stone-400">Fritidshem · schemaverktyg</p>
+              <p className="text-[10px] uppercase tracking-widest text-stone-400">{view === 'home' ? 'SchemaFIX · start' : view === 'school' ? 'Skola · planeringsstöd' : 'Fritidshem · schemaverktyg'}</p>
               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                 <h2 className="display-font text-2xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>{(APP_NAV_ITEMS.find(i => i.k === view) || {}).label || 'SchemaFIX'}</h2>
                 {dirty && (
@@ -3972,12 +4030,12 @@ function FritidsSchemaApp() {
                   Spara som...
                 </button>
               )}
-              <button onClick={handleGenerate} disabled={generating || staff.length === 0}
+              {view !== 'home' && view !== 'school' && <button onClick={handleGenerate} disabled={generating || staff.length === 0}
                 title={workflowMode === WORKFLOW_MODE_EXISTING ? 'Valfritt: låt appen pussla ett nytt schemaförslag om du vill jämföra med ditt befintliga schema.' : 'Låt appen pussla fram tre schemaförslag utifrån regler och bemanning.'}
                 className="px-4 py-2 rounded-full text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2 disabled:opacity-50">
                 <Wand2 size={14} />
                 {generating ? 'Räknar...' : workflowMode === WORKFLOW_MODE_EXISTING ? 'Pussla nytt' : 'Generera'}
-              </button>
+              </button>}
             </div>
           </header>
 
@@ -3987,6 +4045,27 @@ function FritidsSchemaApp() {
                 Webbläsarens autosparning kunde inte läsas och har därför inte skrivits över. Öppna din sparade JSON-fil om schemat saknas.
               </div>
             )}
+            {view === 'home' && <HomeView
+              staff={staff}
+              departments={departments}
+              assignments={assignments}
+              driftState={driftState}
+              fridayCycleWeeks={fridayCycleWeeks}
+              workflowMode={workflowMode}
+              onOpenView={setView}
+              onOpenFile={openFile}
+            />}
+            {view === 'school' && <SchoolWorkspaceView
+              staff={staff}
+              assignments={assignments}
+              departments={departments}
+              fridayCycleWeeks={fridayCycleWeeks}
+              fridayTemplateRotation={fridayTemplateRotation}
+              currentFridayWeek={currentFridayWeek}
+              onOpenView={setView}
+              onOpenAssignmentEditor={openAssignmentEditor}
+              onOpenTasksDay={(dayKey) => { setAssignmentDay(dayKey); setView('tasks'); }}
+            />}
             {(view === 'schedule' || view === 'drift') && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <StatCard label="Personal" value={staff.length} sub="aktiva" />
@@ -4473,6 +4552,525 @@ function WorkflowModePanel({ workflowMode, onChangeMode, onOpenView, onOpenFile,
 }
 
 // Tooltip — liten ?-ikon som visar förklarande text vid hover. Funkar både med mus och tapp.
+function countAssignmentRecords(value) {
+  if (Array.isArray(value)) return value.length;
+  if (!value || typeof value !== 'object') return 0;
+  return Object.values(value).reduce((sum, child) => sum + countAssignmentRecords(child), 0);
+}
+
+function HomeView({ staff, departments, assignments, driftState, fridayCycleWeeks, workflowMode, onOpenView, onOpenFile }) {
+  const assignmentCount = useMemo(() => countAssignmentRecords(assignments), [assignments]);
+  const templateCount = useMemo(() => Object.keys(normalizeDriftTemplates(driftState?.templates || {}, staff, fridayCycleWeeks)).length, [driftState?.templates, staff, fridayCycleWeeks]);
+  const modeMeta = getWorkflowModeMeta(workflowMode);
+  const rooms = [
+    {
+      key: 'schedule',
+      label: 'Bygg fritidsschema',
+      eyebrow: 'Nytt läsår / grundschema',
+      desc: 'Pussla eller skriv in fritidshemmets arbetspass, fredagsrull och bemanningsgrund.',
+      icon: Calendar,
+      tone: 'bg-[#D97757] text-white',
+      action: 'Öppna schemabygge',
+    },
+    {
+      key: 'tasks',
+      label: 'Uppdrag',
+      eyebrow: 'Det som måste täckas',
+      desc: 'Lägg på lektioner, rastvärd, pedagogisk lunch, studiestöd, öppning, stängning och fasta tider.',
+      icon: Briefcase,
+      tone: 'bg-[#3D7A8C] text-white',
+      action: 'Öppna uppdrag',
+    },
+    {
+      key: 'drift',
+      label: 'Drift',
+      eyebrow: 'Idag och närmaste månaden',
+      desc: 'Markera frånvaro, se vad som faller bort och använd sparade lösningar när samma problem återkommer.',
+      icon: AlertCircle,
+      tone: 'bg-[#5C8A5E] text-white',
+      action: 'Öppna drift',
+    },
+    {
+      key: 'school',
+      label: 'Skola',
+      eyebrow: 'Lärare, ramtid och undervisning',
+      desc: 'Förbered lärarschema, grupper, ramtider, undervisningspositioner och källstöd för timplan/arbetstid.',
+      icon: School,
+      tone: 'bg-[#8B6FA8] text-white',
+      action: 'Öppna skola',
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="max-w-3xl">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Välj rum</p>
+            <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>Vad vill du göra nu?</h2>
+            <p className="text-sm text-stone-600 mt-2">
+              SchemaFIX delar nu upp arbetet i tydliga rum. Fritidshemmets schemapussel ligger kvar tryggt i Schemabygge, medan Uppdrag, Drift och Skola får egna arbetsytor.
+            </p>
+          </div>
+          <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 px-4 py-3 min-w-[220px]">
+            <p className="text-[10px] uppercase tracking-wider text-stone-500">Arbetssätt fritids</p>
+            <p className="display-font text-xl text-stone-800 mt-1">{modeMeta.shortLabel}</p>
+            <button type="button" onClick={() => onOpenView('settings')} className="mt-2 text-xs text-stone-600 hover:text-stone-900 underline">
+              Ändra i Inställningar
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        {rooms.map(room => (
+          <RoomCard key={room.key} room={room} onOpen={() => onOpenView(room.key)} />
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard label="Personal" value={staff.length} sub="i fritids-/skoldata" />
+        <StatCard label="Avdelningar" value={departments.length} sub="struktur" />
+        <StatCard label="Uppdrag" value={assignmentCount} sub="schemapositioner" />
+        <StatCard label="Driftmallar" value={templateCount} sub="sparade lösningar" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1.4fr,1fr] gap-4">
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-3">Kom igång snabbt</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <QuickLink icon={Users} label="Lägg till eller justera personal" onClick={() => onOpenView('staff')} />
+            <QuickLink icon={Repeat} label="Öppna fredagsrullen" onClick={() => onOpenView('friday')} />
+            <QuickLink icon={Clock} label="Se bemanningsregler" onClick={() => onOpenView('rules')} />
+            <QuickLink icon={Upload} label="Öppna sparad JSON" onClick={onOpenFile} />
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Nästa byggsteg</p>
+          <p className="text-sm text-stone-700 leading-relaxed">
+            Skola-rummet är förberett som egen yta. Nästa naturliga steg är att lägga in lärarnas ramtider och sedan koppla undervisningspositioner till Drift.
+          </p>
+          <button type="button" onClick={() => onOpenView('school')} className="mt-4 px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+            <School size={14} />Fortsätt i Skola
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoomCard({ room, onOpen }) {
+  const Icon = room.icon;
+  return (
+    <button type="button" onClick={onOpen} className="group text-left rounded-2xl bg-white ring-1 ring-stone-200 p-4 hover:ring-stone-300 hover:shadow-sm transition">
+      <div className={`w-10 h-10 rounded-xl ${room.tone} flex items-center justify-center mb-4`}>
+        <Icon size={20} />
+      </div>
+      <p className="text-[10px] uppercase tracking-wider text-stone-400">{room.eyebrow}</p>
+      <h3 className="display-font text-xl text-stone-800 mt-1">{room.label}</h3>
+      <p className="text-sm text-stone-600 mt-2 leading-relaxed min-h-[72px]">{room.desc}</p>
+      <span className="mt-4 inline-flex items-center gap-1.5 text-sm text-stone-700 group-hover:text-stone-950">
+        {room.action}<ArrowRight size={14} />
+      </span>
+    </button>
+  );
+}
+
+function QuickLink({ icon: Icon, label, onClick }) {
+  return (
+    <button type="button" onClick={onClick} className="flex items-center gap-2 rounded-xl bg-stone-50 ring-1 ring-stone-200 px-3 py-2 text-sm text-stone-700 hover:bg-stone-100 transition text-left">
+      <Icon size={15} className="text-stone-500" />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, onOpenView, onOpenAssignmentEditor, onOpenTasksDay }) {
+  const [activeTab, setActiveTab] = useState('overview');
+  const [activeDay, setActiveDay] = useState('mon');
+  const [personFilter, setPersonFilter] = useState('all');
+  const [roleFilter, setRoleFilter] = useState('school');
+  const [query, setQuery] = useState('');
+  const schoolTypes = new Set(['lesson', 'studySupport', 'yard', 'pedLunch', 'meeting', 'collab', 'resource']);
+  const getSchoolRoleCategory = (person) => {
+    return getStaffRoleCategory(person);
+  };
+  const roleMatchesFilter = (person, filter) => {
+    const category = getSchoolRoleCategory(person);
+    if (filter === 'all') return true;
+    if (filter === 'school') return category === 'teacher' || category === 'support';
+    return category === filter;
+  };
+  const schoolPeople = useMemo(() => staff.filter(person => roleMatchesFilter(person, 'school')), [staff]);
+  const peopleToShow = useMemo(() => staff.filter(person => roleMatchesFilter(person, roleFilter)), [staff, roleFilter]);
+  const positionRows = useMemo(() => {
+    const rows = [];
+    peopleToShow.forEach(person => {
+      const tasks = getAssignmentsForDay(assignments, person.id, activeDay, {
+        fridayWeek: activeDay === 'fri' ? currentFridayWeek : 1,
+        cycleWeeks: fridayCycleWeeks,
+        fridayTemplateRotation,
+      });
+      tasks.forEach(task => {
+        const searchable = `${person.name || ''} ${person.role || ''} ${task.label || ''} ${task.target || ''} ${task.notes || ''} ${getAssignmentTypeMeta(task.type).label}`.toLowerCase();
+        const targetLooksSchool = /f-?1|2-?3|klass|grupp|år|ars|skola|lektion|studiestöd|studiestod|undervisning/.test(searchable);
+        if (!schoolTypes.has(task.type) && !targetLooksSchool) return;
+        if (personFilter !== 'all' && String(person.id) !== String(personFilter)) return;
+        if (query.trim() && !searchable.includes(query.trim().toLowerCase())) return;
+        rows.push({ person, task });
+      });
+    });
+    return rows.sort((a, b) => a.task.start - b.task.start || String(a.person.name).localeCompare(String(b.person.name), 'sv'));
+  }, [peopleToShow, assignments, activeDay, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation, personFilter, query]);
+  const schoolPositionCount = useMemo(() => {
+    let count = 0;
+    DAYS.forEach(day => {
+      staff.forEach(person => {
+        getAssignmentsForDay(assignments, person.id, day.key, {
+          fridayWeek: day.key === 'fri' ? currentFridayWeek : 1,
+          cycleWeeks: fridayCycleWeeks,
+          fridayTemplateRotation,
+        }).forEach(task => {
+          if (schoolTypes.has(task.type)) count += 1;
+        });
+      });
+    });
+    return count;
+  }, [staff, assignments, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]);
+  const activeDayLabel = getDayMeta(activeDay).label;
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="max-w-3xl">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Gemensam bemanning</p>
+            <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>Skola</h2>
+            <p className="text-sm text-stone-600 mt-2">
+              Skola använder samma personal, samma uppdrag och samma Drift. Lärare läggs i Personal, medan lektioner, studiestöd, rastvärd och möten läggs som uppdrag som Drift kan läsa vid frånvaro.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 min-w-[260px]">
+            <StatCard label="Skolpersoner" value={schoolPeople.length} sub={schoolPeople.length ? 'via roll/namn' : 'lägg roller i Personal'} />
+            <StatCard label="Skolpositioner" value={schoolPositionCount} sub="från Uppdrag" />
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-1 p-1 rounded-xl bg-stone-100">
+          {[
+            { id: 'overview', label: 'Översikt', icon: School },
+            { id: 'time', label: 'Ramtider', icon: Clock },
+            { id: 'positions', label: 'Schemapositioner', icon: BookOpen },
+            { id: 'sources', label: 'Källor', icon: HelpCircle },
+          ].map(tab => {
+            const Icon = tab.icon;
+            return (
+              <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)}
+                className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition ${activeTab === tab.id ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-600 hover:text-stone-900'}`}>
+                <Icon size={14} />{tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {activeTab === 'overview' && (
+        <div className="grid grid-cols-1 lg:grid-cols-[1.15fr,0.85fr] gap-4">
+          <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Så håller vi ihop skola och fritids</p>
+            <div className="space-y-3 text-sm text-stone-700 leading-relaxed">
+              <p><strong>Personal:</strong> alla vuxna bor på samma ställe. Sätt gärna roll som lärare, samverkare, resurs eller fritids.</p>
+              <p><strong>Uppdrag:</strong> lektioner, studiestöd, pedagogisk lunch, rastvärd och möten blir schemapositioner som kan behöva täckas.</p>
+              <p><strong>Drift:</strong> en gemensam frånvarovy visar både skola och fritids när någon är borta.</p>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-4">
+              <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+                <Users size={14} />Öppna Personal
+              </button>
+              <button type="button" onClick={() => onOpenTasksDay(activeDay)} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition inline-flex items-center gap-2">
+                <Briefcase size={14} />Öppna Uppdrag
+              </button>
+              <button type="button" onClick={() => onOpenView('drift')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition inline-flex items-center gap-2">
+                <AlertCircle size={14} />Öppna Drift
+              </button>
+            </div>
+          </div>
+          <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Nästa praktiska steg</p>
+            <div className="space-y-2">
+              <SchoolStep icon={Users} title="1. Märk upp lärare" text="Använd rollfältet i Personal så Skola-vyn hittar rätt personer." />
+              <SchoolStep icon={BookOpen} title="2. Lägg positioner" text="Skapa lektioner, studiestöd och rastvärd i Uppdrag. De visas här automatiskt." />
+              <SchoolStep icon={AlertCircle} title="3. Testa i Drift" text="Markera frånvaro och se om både skol- och fritidsuppdrag fångas." />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'time' && (
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Ramtider från Personal</p>
+              <h3 className="display-font text-2xl text-stone-800">Lärare och samverkare</h3>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <select value={roleFilter} onChange={e => { setRoleFilter(e.target.value); setPersonFilter('all'); }}
+                className="px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700"
+                title="Filtrera på roll eller befattning">
+                <option value="school">Skola: lärare/samverkare/resurs</option>
+                <option value="teacher">Lärare</option>
+                <option value="support">Samverkare/resurs</option>
+                <option value="fritids">Lärare i fritidshem</option>
+                <option value="other">Övriga/utan roll</option>
+                <option value="all">Alla roller</option>
+              </select>
+              <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+                <Edit3 size={14} />Redigera i Personal
+              </button>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-xs uppercase tracking-wider text-stone-500 bg-stone-50">
+                <tr>
+                  <th className="px-3 py-2 text-left rounded-l-lg">Person</th>
+                  {DAYS.map(day => <th key={day.key} className="px-3 py-2 text-left">{day.short}</th>)}
+                  <th className="px-3 py-2 text-right rounded-r-lg">Vecka</th>
+                </tr>
+              </thead>
+              <tbody>
+                {peopleToShow.map(person => {
+                  const weekly = weeklyMinutes(person, fridayCycleWeeks, fridayTemplateRotation);
+                  return (
+                    <tr key={person.id} className="border-b border-stone-100 last:border-0">
+                      <td className="px-3 py-3">
+                        <p className="font-medium text-stone-800">{person.name}</p>
+                        <p className="text-xs text-stone-500">{getStaffRoleLabel(person.employmentRole)}{person.role ? ` · ${person.role}` : ''}</p>
+                      </td>
+                      {DAYS.map(day => {
+                        const shift = getShiftForDay(person, day.key, { fridayWeek: currentFridayWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation });
+                        return (
+                          <td key={day.key} className="px-3 py-3 tabular-nums text-stone-700">
+                            {shift ? `${shift[0]}-${shift[1]}` : <span className="text-stone-400 italic">ledig</span>}
+                          </td>
+                        );
+                      })}
+                      <td className="px-3 py-3 text-right tabular-nums text-stone-700">{minToHM(weekly)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {peopleToShow.length === 0 && <p className="text-sm text-stone-500 py-6">Lägg personal först, så visas ramtiderna här.</p>}
+        </div>
+      )}
+
+      {activeTab === 'positions' && (
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Läser från Uppdrag</p>
+              <h3 className="display-font text-2xl text-stone-800">Schemapositioner · {activeDayLabel}</h3>
+            </div>
+            <button type="button" onClick={() => onOpenTasksDay(activeDay)} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+              <Briefcase size={14} />Redigera i Uppdrag
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <div className="flex gap-1 p-1 rounded-xl bg-stone-100">
+              {DAYS.map(day => (
+                <button key={day.key} type="button" onClick={() => setActiveDay(day.key)}
+                  className={`px-3 py-1.5 rounded-lg text-sm transition ${activeDay === day.key ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-600 hover:text-stone-900'}`}>
+                  {day.short}
+                </button>
+              ))}
+            </div>
+            <select value={roleFilter} onChange={e => { setRoleFilter(e.target.value); setPersonFilter('all'); }}
+              className="px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700"
+              title="Filtrera på roll eller befattning">
+              <option value="school">Skola: lärare/samverkare/resurs</option>
+              <option value="teacher">Lärare</option>
+              <option value="support">Samverkare/resurs</option>
+                <option value="fritids">Lärare i fritidshem</option>
+              <option value="other">Övriga/utan roll</option>
+              <option value="all">Alla roller</option>
+            </select>
+            <select value={personFilter} onChange={e => setPersonFilter(e.target.value)}
+              className="px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700">
+              <option value="all">Alla personer</option>
+              {peopleToShow.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
+            </select>
+            <input type="search" value={query} onChange={e => setQuery(e.target.value)}
+              placeholder="Sök grupp, ämne, person..."
+              className="px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 min-w-[220px]" />
+          </div>
+          {positionRows.length > 0 ? (
+            <div className="space-y-2">
+              {positionRows.map(({ person, task }) => {
+                const meta = getAssignmentTypeMeta(task.type);
+                const dept = departments.find(d => d.id === person.deptId);
+                return (
+                  <div key={`${person.id}-${task.id}`} className="rounded-xl bg-stone-50 ring-1 ring-stone-200 px-3 py-2 flex items-center gap-3 flex-wrap">
+                    <div className="w-28 tabular-nums text-sm text-stone-800 font-medium">{minToTime(task.start)}-{minToTime(task.end)}</div>
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: meta.color }} />
+                    <div className="min-w-[180px] flex-1">
+                      <p className="text-sm text-stone-800 font-medium">{task.label || meta.label}</p>
+                      <p className="text-xs text-stone-500">
+                        {task.target || 'ingen grupp/klass angiven'} · {person.name} · {getStaffRoleLabel(person.employmentRole)}{person.role ? ` · ${person.role}` : ''}{dept ? ` · ${dept.name}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 text-[11px]">
+                      {task.mustCover && <span className="rounded-full bg-rose-50 text-rose-700 ring-1 ring-rose-200 px-2 py-0.5">måste täckas</span>}
+                      {task.releaseForCover ? <span className="rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 px-2 py-0.5">flyttbar</span> : <span className="rounded-full bg-stone-100 text-stone-600 ring-1 ring-stone-200 px-2 py-0.5">låst</span>}
+                    </div>
+                    <button type="button" onClick={() => onOpenAssignmentEditor(person.id, activeDay)}
+                      className="px-2 py-1 rounded-lg text-xs bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">
+                      Ändra
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-6 text-center">
+              <BookOpen size={24} className="mx-auto text-stone-300 mb-2" />
+              <p className="text-sm text-stone-600">Inga skolpositioner hittades för {activeDayLabel.toLowerCase()}.</p>
+              <p className="text-xs text-stone-500 mt-1">Lägg lektion, studiestöd, rastvärd, pedagogisk lunch eller möte i Uppdrag så dyker det upp här.</p>
+              <button type="button" onClick={() => onOpenTasksDay(activeDay)} className="mt-4 px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition">
+                Lägg i Uppdrag
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'sources' && (
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Källor att luta sig mot</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <SourceLink label="Skolverket: undervisningstid, lärotider och schema" href="https://www.skolverket.se/styrning-och-ansvar/regler-och-ansvar/ansvar-i-skolfragor/undervisningstid-larotider-och-schema" />
+            <SourceLink label="Skolverket: timplan för grundskolan" href="https://www.skolverket.se/undervisning/grundskolan/timplan-for-grundskolan" />
+            <SourceLink label="Sveriges Lärare: ferietjänst" href="https://www.sverigeslarare.se/rad-och-stod/arbetstid/ferietjanst/" />
+            <SourceLink label="Sveriges Lärare: arbetstidens ram" href="https://www.sverigeslarare.se/rad-och-stod/arbetstid/regler-for-arbetstiden/" />
+          </div>
+          <p className="text-xs text-stone-500 mt-4 leading-relaxed">
+            Appen ska fungera som planeringsstöd. Källorna öppnas separat så att rektor/schemaansvarig kan kontrollera aktuell tolkning mot avtal, huvudman och lokala beslut.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SchoolStep({ icon: Icon, title, text }) {
+  return (
+    <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3 flex gap-3">
+      <div className="w-8 h-8 rounded-lg bg-white ring-1 ring-stone-200 text-stone-600 flex items-center justify-center shrink-0">
+        <Icon size={15} />
+      </div>
+      <div>
+        <p className="text-sm font-medium text-stone-800">{title}</p>
+        <p className="text-xs text-stone-500 mt-0.5 leading-relaxed">{text}</p>
+      </div>
+    </div>
+  );
+}
+
+function SchoolView({ staff, assignments, onOpenView }) {
+  const teacherLikeCount = useMemo(() => staff.filter(person => {
+    const text = `${person.name || ''} ${person.role || ''}`.toLowerCase();
+    return text.includes('larare') || text.includes('lärare');
+  }).length, [staff]);
+  const assignmentCount = useMemo(() => countAssignmentRecords(assignments), [assignments]);
+  const steps = [
+    { icon: Users, label: 'Lärare och ramtider', status: 'Nästa', desc: 'Registrera när lärare är på plats. För ferietjänst fokuserar vi först på den reglerade/arbetsplatsförlagda tiden.' },
+    { icon: GraduationCap, label: 'Grupper och årskurser', status: 'Planerad', desc: 'Stöd för F-1A, 2-3A och andra åldersblandade grupper utan att tvinga fram en traditionell klassstruktur.' },
+    { icon: BookOpen, label: 'Undervisningspositioner', status: 'Planerad', desc: 'Lektioner, studiestöd, rastvärd, pedagogisk lunch och fasta möten som kan analyseras vid frånvaro.' },
+    { icon: AlertCircle, label: 'Drift skola', status: 'Planerad', desc: 'När en lärare är borta ska appen visa vilka positioner som behöver täckas och vilka som kan vara ersättare.' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="max-w-3xl">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Nytt rum</p>
+            <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>Skola</h2>
+            <p className="text-sm text-stone-600 mt-2">
+              Här samlar vi lärarnas ramtider, undervisning, fasta möten och kommande timplanskontroll. Första versionen är medvetet lugn: den visar riktningen och håller fritids-generatorn orörd.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 min-w-[260px]">
+            <StatCard label="Lärare hittade" value={teacherLikeCount} sub="via roll/namn" />
+            <StatCard label="Uppdrag totalt" value={assignmentCount} sub="kan återanvändas" />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        {steps.map(step => {
+          const Icon = step.icon;
+          return (
+            <div key={step.label} className="rounded-2xl bg-white ring-1 ring-stone-200 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="w-9 h-9 rounded-xl bg-stone-100 text-stone-700 flex items-center justify-center">
+                  <Icon size={18} />
+                </div>
+                <span className="text-[10px] uppercase tracking-wider text-stone-500 bg-stone-100 rounded-full px-2 py-1">{step.status}</span>
+              </div>
+              <h3 className="display-font text-lg text-stone-800 mt-4">{step.label}</h3>
+              <p className="text-sm text-stone-600 mt-2 leading-relaxed">{step.desc}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1.15fr,0.85fr] gap-4">
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Så bygger vi vidare</p>
+          <div className="space-y-3 text-sm text-stone-700 leading-relaxed">
+            <p><strong>Steg 1:</strong> skapa enkel lärarlista/ramtid eller återanvänd Personal med rollfilter.</p>
+            <p><strong>Steg 2:</strong> lägg undervisningspositioner per grupp, dag och tid.</p>
+            <p><strong>Steg 3:</strong> koppla frånvaro i Drift till lärarnas positioner, precis som fritidsuppdrag.</p>
+            <p><strong>Senare:</strong> Excel-import, timplansavstämning och kalenderexport.</p>
+          </div>
+          <div className="flex flex-wrap gap-2 mt-4">
+            <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+              <Users size={14} />Öppna Personal
+            </button>
+            <button type="button" onClick={() => onOpenView('tasks')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition inline-flex items-center gap-2">
+              <Briefcase size={14} />Öppna Uppdrag
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Källor att luta sig mot</p>
+          <div className="space-y-2">
+            <SourceLink label="Skolverket: undervisningstid, lärotider och schema" href="https://www.skolverket.se/styrning-och-ansvar/regler-och-ansvar/ansvar-i-skolfragor/undervisningstid-larotider-och-schema" />
+            <SourceLink label="Skolverket: timplan för grundskolan" href="https://www.skolverket.se/undervisning/grundskolan/timplan-for-grundskolan" />
+            <SourceLink label="Sveriges Lärare: ferietjänst" href="https://www.sverigeslarare.se/rad-och-stod/arbetstid/ferietjanst/" />
+            <SourceLink label="Sveriges Lärare: arbetstidens ram" href="https://www.sverigeslarare.se/rad-och-stod/arbetstid/regler-for-arbetstiden/" />
+          </div>
+          <p className="text-xs text-stone-500 mt-4 leading-relaxed">
+            Appen ska fungera som planeringsstöd. Källorna öppnas separat så att rektor/schemaansvarig kan kontrollera aktuell tolkning mot avtal, huvudman och lokala beslut.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SourceLink({ label, href }) {
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-3 rounded-xl bg-stone-50 ring-1 ring-stone-200 px-3 py-2 text-sm text-stone-700 hover:bg-stone-100 transition">
+      <span>{label}</span>
+      <ExternalLink size={14} className="text-stone-400 shrink-0" />
+    </a>
+  );
+}
+
 function Tooltip({ text }) {
   const [open, setOpen] = useState(false);
   return (
@@ -5543,7 +6141,10 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
                       {dept.name}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-stone-600">{s.role || '—'}</td>
+                  <td className="px-4 py-3 text-stone-600">
+                    <p>{getStaffRoleLabel(s.employmentRole)}</p>
+                    {s.role && <p className="text-[10px] text-stone-400 mt-0.5">{s.role}</p>}
+                  </td>
                   <td className="px-4 py-3 text-right text-stone-700 tabular-nums text-xs">
                     {(s.percent ?? 100)}% av {(s.fullTimeHours ?? 37.5)}h
                   </td>
@@ -9183,7 +9784,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
         <div className="sticky top-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between z-10">
           <div>
             <h2 className="display-font text-2xl text-stone-800">{form.name}</h2>
-            <p className="text-xs text-stone-500">{dept.name}{form.role ? ` · ${form.role}` : ''}</p>
+            <p className="text-xs text-stone-500">{dept.name} · {getStaffRoleLabel(form.employmentRole)}{form.role ? ` · ${form.role}` : ''}</p>
           </div>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-700"><X size={20} /></button>
         </div>
@@ -9193,15 +9794,19 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
           <Section title="Grunduppgifter">
             <div className="grid grid-cols-2 gap-4">
               <Field label="Namn"><input className="input" autoComplete="off" spellCheck="false" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field>
-              <Field label="Roll/undervisning"><input className="input" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} placeholder="ex. lärare åk 1, samverkare, musik" /></Field>
+              <Field label="Befattning">
+                <select className="input" value={form.employmentRole || ''} onChange={e => setForm({ ...form, employmentRole: e.target.value })}>
+                  {STAFF_ROLE_OPTIONS.map(option => <option key={option.id || 'empty'} value={option.id}>{option.label}</option>)}
+                </select>
+              </Field>
               <Field label="Avdelning">
                 <select className="input" value={form.deptId || ''} onChange={e => setForm({ ...form, deptId: e.target.value })}>
                   {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
               </Field>
-              <div></div>
+              <Field label="Förtydligande/undervisning"><input className="input" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} placeholder="ex. åk 1, musik, samverkan" /></Field>
             </div>
-            <p className="text-xs text-stone-500 mt-2">Rollfältet syns i listor och Drift-sökningen. Använd det gärna för lärare, samverkare, resurs eller ämne.</p>
+            <p className="text-xs text-stone-500 mt-2">Befattning styr filtren i Skola. Förtydligandet syns i listor och Drift-sökningen, till exempel åk 1, musik eller samverkan.</p>
             <div className="mt-4">
               <p className="text-xs text-stone-600 mb-2" style={{ fontWeight: 500 }}>Tjänstgöring</p>
               <div className="grid grid-cols-2 gap-4">
