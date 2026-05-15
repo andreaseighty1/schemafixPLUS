@@ -298,7 +298,7 @@ const ASSIGNMENT_TEMPLATES = [
   { id: 'meeting-30', type: 'meeting', label: 'Möte 30 min', duration: 30 },
 ];
 const initialAssignments = {};
-const initialDriftState = { dayKey: 'mon', absences: {} };
+const initialDriftState = { dayKey: 'mon', absences: {}, solutions: {} };
 const WORKFLOW_MODE_GENERATE = 'generate';
 const WORKFLOW_MODE_EXISTING = 'existing';
 const APP_NAV_ITEMS = [
@@ -1146,11 +1146,38 @@ function normalizeDriftAbsences(absences, staff = []) {
   });
   return next;
 }
+function normalizeDriftSolutions(solutions, staff = []) {
+  const allowedIds = new Set((Array.isArray(staff) ? staff : []).map(person => String(person.id)));
+  const next = {};
+  const source = solutions && typeof solutions === 'object' ? solutions : {};
+  ALL_DAY_KEYS.forEach(dayKey => {
+    const daySource = source[dayKey] && typeof source[dayKey] === 'object' ? source[dayKey] : {};
+    const daySolutions = {};
+    Object.entries(daySource).forEach(([taskId, item]) => {
+      if (!item || typeof item !== 'object') return;
+      const cleanTaskId = String(item.taskId || taskId || '').trim();
+      const coverPersonId = String(item.coverPersonId || '').trim();
+      const absentPersonId = String(item.absentPersonId || '').trim();
+      if (!cleanTaskId || !coverPersonId) return;
+      if (allowedIds.size > 0 && !allowedIds.has(coverPersonId)) return;
+      if (absentPersonId && allowedIds.size > 0 && !allowedIds.has(absentPersonId)) return;
+      daySolutions[cleanTaskId] = {
+        taskId: cleanTaskId,
+        absentPersonId,
+        coverPersonId,
+        decidedAt: typeof item.decidedAt === 'string' ? item.decidedAt : '',
+      };
+    });
+    if (Object.keys(daySolutions).length > 0) next[dayKey] = daySolutions;
+  });
+  return next;
+}
 function normalizeDriftState(state, staff = []) {
   const dayKey = ALL_DAY_KEYS.includes(state?.dayKey) ? state.dayKey : initialDriftState.dayKey;
   return {
     dayKey,
     absences: normalizeDriftAbsences(state?.absences, staff),
+    solutions: normalizeDriftSolutions(state?.solutions, staff),
   };
 }
 function normalizeAssignmentWindows(config, departments = [], coverageBlocks = []) {
@@ -1453,6 +1480,7 @@ function buildReplacementCandidates(staff, assignments, dayKey, intervalStart, i
   const candidates = (Array.isArray(staff) ? staff : []).map(person => {
     if (absentSet.has(String(person.id))) return null;
     if (owner && person.id === owner.id) return null;
+    if (dayKey === 'fri' && isPersonOffOnFridayForDrift(person, options.cycleWeeks || 8, options.fridayTemplateRotation || [], options.fridayWeek || 1)) return null;
     const shift = getShiftForDay(person, dayKey, options);
     if (!shift) return null;
     const shiftStart = timeToMin(shift[0]);
@@ -1490,6 +1518,13 @@ function buildReplacementCandidates(staff, assignments, dayKey, intervalStart, i
     free: candidates.filter(candidate => candidate.overlapping.length === 0),
     busy: candidates.filter(candidate => candidate.overlapping.length > 0),
   };
+}
+function isPersonOffOnFridayForDrift(person, cycleWeeks = 8, fridayTemplateRotation = [], fridayWeek = 1) {
+  if ((person.daysOff || []).includes('fri')) return true;
+  if (person.fridayMode === 'fixed') return !normalizeShift(person.fridayShift);
+  if (person.fridayMode === 'rotation') return !normalizeShift(getFridayShift(person, fridayWeek, cycleWeeks, fridayTemplateRotation));
+  if (person.fridayMode == null) return true;
+  return false;
 }
 function getStrictConstraints(person, dayKey) {
   const evals = ['even', 'odd'].map(parity => ({
@@ -2859,6 +2894,7 @@ function FritidsSchemaApp() {
   // så den nollställs vid ny session — men då fortsätter Spara att fungera (faller tillbaka till nedladdning).
   const [fileHandle, setFileHandle] = useState(null);
   const [showWelcome, setShowWelcome] = useState(false);
+  const [storageLoadError, setStorageLoadError] = useState(false);
   const [showExamplePicker, setShowExamplePicker] = useState(false);
   const [tourStep, setTourStep] = useState(null); // null = ingen tur aktiv, annars 0..5
   const [tourMode, setTourMode] = useState(WORKFLOW_MODE_GENERATE);
@@ -2887,6 +2923,21 @@ function FritidsSchemaApp() {
   // som användaren själv exporterar/importerar — så data följer med mellan datorer/kollegor.
   const STORAGE_KEY = 'fritids-schema-v1';
   const WORKFLOW_MODE_STORAGE_KEY = 'schemafix-workflow-mode-v1';
+  const STORAGE_RECOVERY_KEY = 'fritids-schema-v1-before-last-start';
+
+  const preserveStoredBackup = (raw) => {
+    if (!raw) return;
+    try {
+      const current = JSON.parse(raw);
+      const currentStaffCount = Array.isArray(current?.staff) ? current.staff.length : 0;
+      const existingRaw = localStorage.getItem(STORAGE_RECOVERY_KEY);
+      const existing = existingRaw ? JSON.parse(existingRaw) : null;
+      const existingStaffCount = Array.isArray(existing?.staff) ? existing.staff.length : 0;
+      if (currentStaffCount > 0 || existingStaffCount === 0) {
+        localStorage.setItem(STORAGE_RECOVERY_KEY, raw);
+      }
+    } catch {}
+  };
 
   const activateWorkflowMode = (mode, options = {}) => {
     const normalized = normalizeWorkflowMode(mode);
@@ -2907,7 +2958,11 @@ function FritidsSchemaApp() {
       const storedWorkflowMode = normalizeWorkflowMode(localStorage.getItem(WORKFLOW_MODE_STORAGE_KEY));
         if (raw) {
           foundData = true;
+          preserveStoredBackup(raw);
           const data = JSON.parse(raw);
+          if (!data || typeof data !== 'object' || !Array.isArray(data.staff) || !Array.isArray(data.departments)) {
+            throw new Error('Autosparningen har okänt format.');
+          }
           setWorkflowModeState(normalizeWorkflowMode(data.workflowMode || storedWorkflowMode));
           const normalizedStaff = normalizeStaffList(data.staff || [], data.fridayCycleWeeks || 8);
           if (data.staff) {
@@ -2928,6 +2983,7 @@ function FritidsSchemaApp() {
           setWorkflowModeState(storedWorkflowMode);
         }
     } catch (err) {
+      setStorageLoadError(true);
       console.error('Kunde inte läsa backup från localStorage:', err);
     }
     // Visa välkomstvyn endast vid allra första besöket — tom localStorage
@@ -2969,6 +3025,7 @@ function FritidsSchemaApp() {
   // Autospar till localStorage vid varje ändring + markera som "ändrat sedan senaste filsparning"
   useEffect(() => {
     if (!loaded) return;
+    if (storageLoadError) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         staff: normalizeStaffList(staff, fridayCycleWeeks),
@@ -2977,7 +3034,7 @@ function FritidsSchemaApp() {
       localStorage.setItem(WORKFLOW_MODE_STORAGE_KEY, workflowMode);
     } catch {}
     setDirty(true);
-  }, [staff, departments, normalizedCoverageBlocks, passBank, assignments, normalizedAssignmentWindows, driftState, fridayCycleWeeks, fridayTemplateRotation, workflowMode, loaded]);
+  }, [staff, departments, normalizedCoverageBlocks, passBank, assignments, normalizedAssignmentWindows, driftState, fridayCycleWeeks, fridayTemplateRotation, workflowMode, loaded, storageLoadError]);
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
@@ -3535,7 +3592,7 @@ function FritidsSchemaApp() {
             <OwlMark size={36} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v51</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v56</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -3619,6 +3676,11 @@ function FritidsSchemaApp() {
           </header>
 
           <div className="flex-1 px-6 py-5 max-w-7xl w-full mx-auto">
+            {storageLoadError && (
+              <div className="mb-4 rounded-xl bg-amber-50 ring-1 ring-amber-200 px-4 py-3 text-sm text-amber-900">
+                Webbläsarens autosparning kunde inte läsas och har därför inte skrivits över. Öppna din sparade JSON-fil om schemat saknas.
+              </div>
+            )}
             {(view === 'schedule' || view === 'drift') && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <StatCard label="Personal" value={staff.length} sub="aktiva" />
@@ -5657,6 +5719,9 @@ function DriftView({
   const fridayOptions = { fridayWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation };
   const absentIds = Array.isArray(driftState?.absences?.[dayKey]) ? driftState.absences[dayKey] : [];
   const absentSet = new Set(absentIds.map(id => String(id)));
+  const daySolutions = driftState?.solutions?.[dayKey] && typeof driftState.solutions[dayKey] === 'object'
+    ? driftState.solutions[dayKey]
+    : {};
 
   const rows = useMemo(() => (
     staff.map(person => {
@@ -5725,8 +5790,49 @@ function DriftView({
       }))),
     [absentRows, staff, assignments, dayKey, absentIds, fridayWeek, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek]
   );
+  const openCoverTasks = lostCoverTasks.filter(item => !daySolutions[String(item.task.id)]);
+  const resolvedCoverTasks = lostCoverTasks
+    .map(item => ({ ...item, solution: daySolutions[String(item.task.id)] }))
+    .filter(item => item.solution);
   const lostTasks = absentRows.reduce((sum, row) => sum + row.tasks.length, 0);
-  const urgentCount = lostCoverTasks.length + gapIssues.length;
+  const urgentCount = openCoverTasks.length + gapIssues.length;
+
+  const resolveCoverTask = (task, absentPerson, coverPersonId) => {
+    setDriftState(prev => {
+      const taskId = String(task.id);
+      return normalizeDriftState({
+        ...(prev || initialDriftState),
+        dayKey,
+        solutions: {
+          ...((prev && prev.solutions) || {}),
+          [dayKey]: {
+            ...((prev && prev.solutions && prev.solutions[dayKey]) || {}),
+            [taskId]: {
+              taskId,
+              absentPersonId: String(absentPerson.id),
+              coverPersonId: String(coverPersonId),
+              decidedAt: new Date().toISOString(),
+            },
+          },
+        },
+      }, staff);
+    });
+  };
+
+  const clearCoverTaskSolution = (taskId) => {
+    setDriftState(prev => {
+      const nextDaySolutions = { ...((prev && prev.solutions && prev.solutions[dayKey]) || {}) };
+      delete nextDaySolutions[String(taskId)];
+      const nextSolutions = { ...((prev && prev.solutions) || {}) };
+      if (Object.keys(nextDaySolutions).length > 0) nextSolutions[dayKey] = nextDaySolutions;
+      else delete nextSolutions[dayKey];
+      return normalizeDriftState({
+        ...(prev || initialDriftState),
+        dayKey,
+        solutions: nextSolutions,
+      }, staff);
+    });
+  };
 
   const toggleAbsent = (personId) => {
     setDriftState(prev => {
@@ -5735,6 +5841,14 @@ function DriftView({
       const nextDay = currentDay.includes(id)
         ? currentDay.filter(existingId => existingId !== id)
         : [...currentDay, id];
+      const nextSolutions = { ...((prev && prev.solutions) || {}) };
+      if (currentDay.includes(id) && nextSolutions[dayKey]) {
+        const kept = Object.fromEntries(
+          Object.entries(nextSolutions[dayKey]).filter(([, solution]) => String(solution.absentPersonId) !== id)
+        );
+        if (Object.keys(kept).length > 0) nextSolutions[dayKey] = kept;
+        else delete nextSolutions[dayKey];
+      }
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
@@ -5742,6 +5856,7 @@ function DriftView({
           ...((prev && prev.absences) || {}),
           [dayKey]: nextDay,
         },
+        solutions: nextSolutions,
       }, staff);
     });
   };
@@ -5754,6 +5869,10 @@ function DriftView({
         ...((prev && prev.absences) || {}),
         [dayKey]: [],
       },
+      solutions: {
+        ...((prev && prev.solutions) || {}),
+        [dayKey]: {},
+      },
     }, staff));
   };
 
@@ -5761,6 +5880,7 @@ function DriftView({
     ...(prev || initialDriftState),
     dayKey: nextDayKey,
     absences: (prev && prev.absences) || {},
+    solutions: (prev && prev.solutions) || {},
   }, staff));
 
   if (staff.length === 0) {
@@ -5801,7 +5921,7 @@ function DriftView({
         <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
           <DriftKpi label="På pass nu" value={presentNow} sub={`av ${onShiftRows.length} schemalagda ${dayLabel.toLowerCase()}`} />
           <DriftKpi label="Frånvarande" value={absentRows.length + staleAbsentRows.length} sub="markerade här i Drift" tone={(absentRows.length + staleAbsentRows.length) > 0 ? 'amber' : 'emerald'} />
-          <DriftKpi label="Akut att täcka" value={lostCoverTasks.length + gapIssues.length} sub="kritiska uppdrag + bemanningsluckor" tone={(lostCoverTasks.length + gapIssues.length) > 0 ? 'rose' : 'emerald'} highlight={(lostCoverTasks.length + gapIssues.length) > 0} />
+          <DriftKpi label="Akut att täcka" value={urgentCount} sub="olösta uppdrag + bemanningsluckor" tone={urgentCount > 0 ? 'rose' : 'emerald'} highlight={urgentCount > 0} />
           <DriftKpi label="Påverkade uppdrag" value={lostTasks} sub="ligger på frånvarande" tone={lostTasks > 0 ? 'amber' : 'emerald'} />
         </div>
       </div>
@@ -5814,7 +5934,7 @@ function DriftView({
             Nu · {minToTime(nowMin)}
           </span>
           <span className="text-xs text-stone-500">
-            Dagens pass över tid. Frånvarande markeras med streck. Kritiska uppdrag är svarta segment.
+            Visar {dayLabel.toLowerCase()}. Frånvarande markeras med streck. Kritiska uppdrag är svarta segment.
           </span>
           {dayKey === 'fri' && (
             <span className="text-xs text-stone-400">Visar fredag v.{currentFridayWeek}</span>
@@ -5887,11 +6007,14 @@ function DriftView({
           <div className="px-4 py-3 border-b border-stone-200 flex items-center justify-between gap-3 flex-wrap">
             <div>
               <h2 className="display-font text-lg text-stone-800">Behöver lösas</h2>
-              <p className="text-xs text-stone-500 mt-0.5">{lostCoverTasks.length} kritiska · {gapIssues.length} bemanningsluckor</p>
+              <p className="text-xs text-stone-500 mt-0.5">{openCoverTasks.length} olösta kritiska · {resolvedCoverTasks.length} lösta · {gapIssues.length} bemanningsluckor</p>
             </div>
             <div className="flex gap-1.5">
-              {lostCoverTasks.length > 0 && (
-                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: '#FFE4E6', color: '#BE123C', boxShadow: 'inset 0 0 0 1px #BE123C44' }}>{lostCoverTasks.length} akut</span>
+              {openCoverTasks.length > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: '#FFE4E6', color: '#BE123C', boxShadow: 'inset 0 0 0 1px #BE123C44' }}>{openCoverTasks.length} akut</span>
+              )}
+              {resolvedCoverTasks.length > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: '#D1FAE5', color: '#047857', boxShadow: 'inset 0 0 0 1px #A7F3D0' }}>{resolvedCoverTasks.length} lösta</span>
               )}
               {gapIssues.length > 0 && (
                 <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: '#FEF3C7', color: '#B45309', boxShadow: 'inset 0 0 0 1px #FDE68A' }}>{gapIssues.length} luckor</span>
@@ -5899,14 +6022,14 @@ function DriftView({
             </div>
           </div>
           <div className="p-2 overflow-y-auto" style={{ maxHeight: 540 }}>
-            {lostCoverTasks.length === 0 && gapIssues.length === 0 && (
+            {openCoverTasks.length === 0 && gapIssues.length === 0 && (
               <div className="px-4 py-10 text-center">
                 <CheckCircle2 size={28} className="mx-auto text-emerald-600 mb-2" />
                 <div className="display-font text-base text-stone-700">Inget akut just nu</div>
                 <p className="text-xs text-stone-500 mt-1">Inga kritiska uppdrag faller bort och bemanningskraven är täckta.</p>
               </div>
             )}
-            {lostCoverTasks.map(({ person, dept, task, candidates }) => {
+            {openCoverTasks.map(({ person, dept, task, candidates }) => {
               const meta = getAssignmentTypeMeta(task.type);
               // Smart-sort: samma avdelning först, sedan score, sedan free vs busy
               const allCands = [...(candidates.free || []), ...(candidates.busy || [])];
@@ -5990,7 +6113,17 @@ function DriftView({
                               </div>
                               <div className="text-[10.5px] text-stone-500 truncate">{reason}</div>
                             </div>
-                            <span className="text-[10.5px] font-semibold whitespace-nowrap" style={{ color: fit.color }}>{fit.label}</span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="text-[10.5px] font-semibold whitespace-nowrap" style={{ color: fit.color }}>{fit.label}</span>
+                              <button
+                                type="button"
+                                onClick={() => resolveCoverTask(task, person, cand.person.id)}
+                                className="rounded-full px-2 py-0.5 text-[10.5px] font-semibold bg-stone-800 text-white hover:bg-stone-900 transition"
+                                title={`Markera att ${cand.person.name} täcker ${task.label || meta.label}`}
+                              >
+                                Välj
+                              </button>
+                            </div>
                           </div>
                         );
                       })}
@@ -5999,6 +6132,77 @@ function DriftView({
                       )}
                     </div>
                   )}
+                </div>
+              );
+            })}
+            {resolvedCoverTasks.length > 0 && (
+              <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider font-semibold text-emerald-700">Löst i dagens drift</div>
+            )}
+            {resolvedCoverTasks.map(({ person, dept, task, solution, candidates }) => {
+              const cover = staff.find(member => String(member.id) === String(solution.coverPersonId));
+              const coverDept = cover ? getDept(cover.deptId, departments) : null;
+              const meta = getAssignmentTypeMeta(task.type);
+              const selectedCandidate = [...(candidates.free || []), ...(candidates.busy || [])]
+                .find(candidate => String(candidate.person.id) === String(solution.coverPersonId));
+              const releasableTasks = selectedCandidate?.releasableOverlapping || [];
+              const blockingTasks = selectedCandidate?.blockingOverlapping || [];
+              const breakOk = selectedCandidate?.breakStatus?.hasThirtyMinuteBreak !== false;
+              return (
+                <div key={`resolved-${task.id}`} className="p-3 m-1 rounded-xl bg-emerald-50" style={{ boxShadow: 'inset 0 0 0 1px #A7F3D0' }}>
+                  <div className="flex items-start gap-3">
+                    <CheckCircle2 size={18} className="text-emerald-700 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap text-sm">
+                        <span style={{ color: '#1C1917', fontWeight: 500 }}>{task.label || meta.label}</span>
+                        <span className="text-xs text-stone-500 tabular-nums">{minToTime(task.start)}–{minToTime(task.end)}</span>
+                        <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0 text-[10px]" style={{ background: '#fff', color: meta.color, boxShadow: `inset 0 0 0 1px ${meta.color}44` }}>{meta.short || meta.label}</span>
+                      </div>
+                      <div className="text-[11px] text-stone-600 flex items-center gap-1 mt-1 flex-wrap">
+                        <span style={{ textDecoration: 'line-through' }}>{person.name}</span>
+                        <span className="text-stone-300">ersätts av</span>
+                        <span style={{ fontWeight: 600, color: '#047857' }}>{cover?.name || 'vald ersättare saknas'}</span>
+                        {coverDept && (
+                          <>
+                            <span className="text-stone-300">·</span>
+                            <span className="inline-flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: coverDept.color }} />{coverDept.name}</span>
+                          </>
+                        )}
+                        <span className="text-stone-300">·</span>
+                        <span className="inline-flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: dept.color }} />{dept.name}</span>
+                      </div>
+                      <div className="mt-2 rounded-lg bg-white/75 px-3 py-2 text-[11px] text-stone-600" style={{ boxShadow: 'inset 0 0 0 1px rgba(167, 243, 208, 0.8)' }}>
+                        {!selectedCandidate ? (
+                          <div>
+                            <span style={{ fontWeight: 600, color: '#B45309' }}>Konsekvens:</span> Ersättaren finns inte längre i dagens förslag. Kontrollera lösningen eller ångra och välj igen.
+                          </div>
+                        ) : selectedCandidate.overlapping.length === 0 ? (
+                          <div>
+                            <span style={{ fontWeight: 600, color: '#047857' }}>Konsekvens:</span> {cover?.name || 'Ersättaren'} är ledig i tidsfönstret och behöver inte släppa något annat uppdrag.
+                          </div>
+                        ) : blockingTasks.length === 0 && releasableTasks.length > 0 ? (
+                          <div>
+                            <span style={{ fontWeight: 600, color: '#B45309' }}>Konsekvens:</span> {cover?.name || 'Ersättaren'} släpper {releasableTasks.map(item => `${item.label || inferAssignmentLabel(item.type)} ${minToTime(item.start)}–${minToTime(item.end)}`).join(', ')}.
+                          </div>
+                        ) : (
+                          <div>
+                            <span style={{ fontWeight: 600, color: '#BE123C' }}>Konsekvens:</span> Krockar med {blockingTasks.map(item => `${item.label || inferAssignmentLabel(item.type)} ${minToTime(item.start)}–${minToTime(item.end)}`).join(', ') || `${selectedCandidate.overlapping.length} uppdrag`}. Kontrollera innan lösningen används.
+                          </div>
+                        )}
+                        {!breakOk && (
+                          <div className="mt-1 text-amber-700">
+                            Rast behöver kollas: {selectedCandidate.breakStatus?.label || 'ingen tydlig 30 min rast kvar'}.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => clearCoverTaskSolution(task.id)}
+                      className="text-[11px] text-stone-500 hover:text-stone-800 rounded-full px-2 py-1 hover:bg-white transition"
+                    >
+                      Ångra
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -6043,7 +6247,7 @@ function DriftView({
         <div className="bg-white rounded-2xl ring-1 ring-stone-200 flex flex-col">
           <div className="px-4 py-3 border-b border-stone-200">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="display-font text-lg text-stone-800">Personal idag</h2>
+              <h2 className="display-font text-lg text-stone-800">Personal {dayLabel.toLowerCase()}</h2>
               <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] bg-stone-100 text-stone-500">{onShiftRows.length} på pass</span>
             </div>
             <p className="text-xs text-stone-500 mt-0.5">Klicka för att markera frånvaro</p>
@@ -6078,7 +6282,7 @@ function DriftView({
                     <div className="text-[11px] truncate" style={{ color: row.isAbsent ? '#B45309' : '#78716C' }}>
                       <span className="inline-flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: row.dept.color }} />{row.dept.name}</span>
                       <span className="text-stone-300"> · </span>
-                      {row.shift ? `${row.shift[0]}–${row.shift[1]}` : <span className="italic">ledig idag</span>}
+                      {row.shift ? `${row.shift[0]}–${row.shift[1]}` : <span className="italic">ledig {dayLabel.toLowerCase()}</span>}
                       {personTaskCount > 0 && <><span className="text-stone-300"> · </span>{personTaskCount} uppdrag</>}
                     </div>
                   </div>
@@ -9471,6 +9675,3 @@ ReactDOM.createRoot(rootEl).render(React.createElement(FritidsSchemaApp));
 </script>
 </body>
 </html>
-
-
-
