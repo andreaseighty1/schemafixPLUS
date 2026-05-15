@@ -361,6 +361,7 @@ const ASSIGNMENT_TYPES = [
   { id: 'pedLunch', label: 'Pedagogisk lunch', color: '#65a30d', short: 'Ped.lunch' },
   { id: 'yard', label: 'Rastvärd', color: '#ea580c', short: 'Rastvärd' },
   { id: 'collab', label: 'Samverkan', color: '#2563eb', short: 'Samverkan' },
+  { id: 'studySupport', label: 'Studiestöd', color: '#0891b2', short: 'Studiestöd' },
   { id: 'resource', label: 'Resurs', color: '#d946ef', short: 'Resurs' },
   { id: 'prep', label: 'Förberedelsetid', color: '#be123c', short: 'Förber.' },
   { id: 'planning', label: 'Planering', color: '#64748b', short: 'Planering' },
@@ -375,6 +376,9 @@ const ASSIGNMENT_TEMPLATES = [
   { id: 'collab-40', type: 'collab', label: 'Samverkan 40 min', duration: 40 },
   { id: 'collab-60', type: 'collab', label: 'Samverkan 60 min', duration: 60 },
   { id: 'collab-90', type: 'collab', label: 'Samverkan 90 min', duration: 90 },
+  { id: 'study-30', type: 'studySupport', label: 'Studiestöd 30 min', duration: 30 },
+  { id: 'study-45', type: 'studySupport', label: 'Studiestöd 45 min', duration: 45 },
+  { id: 'study-60', type: 'studySupport', label: 'Studiestöd 60 min', duration: 60 },
   { id: 'resource-40', type: 'resource', label: 'Resurs 40 min', duration: 40 },
   { id: 'resource-60', type: 'resource', label: 'Resurs 60 min', duration: 60 },
   { id: 'resource-80', type: 'resource', label: 'Resurs 80 min', duration: 80 },
@@ -3316,7 +3320,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 14,
+    version: 15,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3890,7 +3894,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v66</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v67</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -7009,7 +7013,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
     [replacementOptions, dayKey, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]
   );
   const quickTemplates = useMemo(
-    () => ASSIGNMENT_TEMPLATES.filter(template => ['lesson', 'collab', 'yard', 'break', 'pedLunch', 'resource', 'planning', 'meeting'].includes(template.type)),
+    () => ASSIGNMENT_TEMPLATES.filter(template => ['lesson', 'collab', 'studySupport', 'yard', 'break', 'pedLunch', 'resource', 'planning', 'meeting'].includes(template.type)),
     []
   );
 
@@ -7161,6 +7165,9 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
             <p className="text-xs text-stone-500 mt-2">
               Du behöver inte fylla varje minut. Uppdragsvyn visar redan automatisk fritidstid och skoldel utifrån verksamhetsfönstren. Använd Fritids eller Skoldel som uppdrag bara när du vill markera något uttryckligen, och markera gärna Öppning eller Stängning när det ansvaret är extra viktigt att fånga i Drift.
             </p>
+            <p className="text-xs text-stone-500 mt-2">
+              För lärare med ferietjänst räcker det att lägga in arbetsplatsförlagd tid här. Förtroendetid behöver inte schemaläggas för att Drift ska kunna föreslå täckning.
+            </p>
           </div>
 
           <div className="flex gap-2 flex-wrap">
@@ -7216,6 +7223,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
               {[
                 { title: 'Lektion', templates: quickTemplates.filter(template => template.type === 'lesson') },
                 { title: 'Rastvärd', templates: quickTemplates.filter(template => template.type === 'yard') },
+                { title: 'Studiestöd', templates: quickTemplates.filter(template => template.type === 'studySupport') },
                 { title: 'Resurs', templates: quickTemplates.filter(template => template.type === 'resource') },
                 { title: 'Samverkan', templates: quickTemplates.filter(template => template.type === 'collab') },
                 { title: 'Övrigt', templates: quickTemplates.filter(template => ['break', 'pedLunch', 'planning', 'meeting'].includes(template.type)) },
@@ -9185,7 +9193,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
           <Section title="Grunduppgifter">
             <div className="grid grid-cols-2 gap-4">
               <Field label="Namn"><input className="input" autoComplete="off" spellCheck="false" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field>
-              <Field label="Roll/undervisning"><input className="input" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} placeholder="ex. åk 1, musik" /></Field>
+              <Field label="Roll/undervisning"><input className="input" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} placeholder="ex. lärare åk 1, samverkare, musik" /></Field>
               <Field label="Avdelning">
                 <select className="input" value={form.deptId || ''} onChange={e => setForm({ ...form, deptId: e.target.value })}>
                   {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
@@ -9193,6 +9201,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
               </Field>
               <div></div>
             </div>
+            <p className="text-xs text-stone-500 mt-2">Rollfältet syns i listor och Drift-sökningen. Använd det gärna för lärare, samverkare, resurs eller ämne.</p>
             <div className="mt-4">
               <p className="text-xs text-stone-600 mb-2" style={{ fontWeight: 500 }}>Tjänstgöring</p>
               <div className="grid grid-cols-2 gap-4">
