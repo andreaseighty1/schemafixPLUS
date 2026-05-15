@@ -3378,7 +3378,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 19,
+    version: 22,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3559,6 +3559,29 @@ function FritidsSchemaApp() {
     setDriftState(normalizeDriftState(initialDriftState, [], fridayCycleWeeks));
   };
   const openAssignmentEditor = (personId, dayKey) => setAssignmentEditor({ personId, dayKey });
+  const addSchoolPosition = ({ personId, dayKey, task }) => {
+    const target = staff.find(member => String(member.id) === String(personId));
+    if (!target || !ALL_DAY_KEYS.includes(dayKey) || !task) return false;
+    const fridayOptions = {
+      fridayWeek: dayKey === 'fri' ? currentFridayWeek : 1,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    };
+    if (!getShiftForDay(target, dayKey, fridayOptions)) return false;
+    setAssignments(prev => {
+      const current = getAssignmentsForDay(prev, target.id, dayKey, fridayOptions);
+      const nextTask = normalizeAssignment({
+        ...task,
+        id: task.id || createAssignmentId(),
+      }, {
+        allowedStaffIds: new Set(staff.map(person => String(person.id))),
+        ownerId: target.id,
+      });
+      if (!nextTask) return prev;
+      return replaceAssignmentsForDay(prev, target.id, dayKey, [...current, nextTask], staff, fridayOptions);
+    });
+    return true;
+  };
   const saveAssignmentsForDay = (personId, dayKey, nextList, copyDayKeys = [], copyPersonIds = []) => {
     const fridayOptions = {
       fridayWeek: dayKey === 'fri' ? currentFridayWeek : 1,
@@ -3952,7 +3975,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v71</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v74</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -3984,7 +4007,7 @@ function FritidsSchemaApp() {
             <p className="text-[10px] text-stone-400 leading-relaxed">
               © 2026 Andreas Jonsson<br />
               42 Improbable Owls · prototyp<br />
-              I samarbete med Madeleine Ljunglöf, förstelärare, Björneborgs skola
+              I samarbete med Madeleine Ljunglöf, förstelärare
             </p>
           </div>
         </aside>
@@ -4065,6 +4088,7 @@ function FritidsSchemaApp() {
               onOpenView={setView}
               onOpenAssignmentEditor={openAssignmentEditor}
               onOpenTasksDay={(dayKey) => { setAssignmentDay(dayKey); setView('tasks'); }}
+              onAddSchoolPosition={addSchoolPosition}
             />}
             {(view === 'schedule' || view === 'drift') && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -4148,7 +4172,7 @@ function FritidsSchemaApp() {
 
         <footer className="mt-10 pt-6 border-t border-stone-200 text-xs text-stone-500 flex justify-between items-start gap-4 flex-wrap">
           <span>Klicka på en person för att redigera detaljer. Tryck "Generera schemaförslag" när du vill att appen pusslar fram alternativ baserat på allas villkor.</span>
-          <span className="text-stone-400">© 2026 Andreas Jonsson · I samarbete med Madeleine Ljunglöf, förstelärare, Björneborgs skola</span>
+          <span className="text-stone-400">© 2026 Andreas Jonsson · I samarbete med Madeleine Ljunglöf, förstelärare</span>
         </footer>
           </div>
         </div>
@@ -4686,12 +4710,23 @@ function QuickLink({ icon: Icon, label, onClick }) {
   );
 }
 
-function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, onOpenView, onOpenAssignmentEditor, onOpenTasksDay }) {
+function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, onOpenView, onOpenAssignmentEditor, onOpenTasksDay, onAddSchoolPosition }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [activeDay, setActiveDay] = useState('mon');
   const [personFilter, setPersonFilter] = useState('all');
   const [roleFilter, setRoleFilter] = useState('school');
   const [query, setQuery] = useState('');
+  const [quickPosition, setQuickPosition] = useState({
+    personId: '',
+    type: 'lesson',
+    start: '08:20',
+    end: '09:00',
+    target: '',
+    label: '',
+    mustCover: true,
+    releaseForCover: false,
+  });
+  const [quickError, setQuickError] = useState('');
   const schoolTypes = new Set(['lesson', 'studySupport', 'yard', 'pedLunch', 'meeting', 'collab', 'resource']);
   const getSchoolRoleCategory = (person) => {
     return getStaffRoleCategory(person);
@@ -4739,6 +4774,66 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
     return count;
   }, [staff, assignments, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]);
   const activeDayLabel = getDayMeta(activeDay).label;
+  const schoolQuickTypes = ['lesson', 'studySupport', 'yard', 'pedLunch', 'meeting', 'collab', 'resource'];
+  const quickPerson = staff.find(person => String(person.id) === String(quickPosition.personId));
+  const quickStartMin = parseFlexibleTimeInput(quickPosition.start);
+  const quickEndMin = parseFlexibleTimeInput(quickPosition.end);
+  const updateQuickPosition = (patch) => {
+    setQuickPosition(prev => ({ ...prev, ...patch }));
+    setQuickError('');
+  };
+  const submitQuickPosition = () => {
+    const personId = quickPosition.personId || (peopleToShow[0]?.id != null ? String(peopleToShow[0].id) : '');
+    const start = parseFlexibleTimeInput(quickPosition.start);
+    const end = parseFlexibleTimeInput(quickPosition.end);
+    if (!personId) {
+      setQuickError('Välj en person först.');
+      return;
+    }
+    if (start == null || end == null || end <= start) {
+      setQuickError('Kontrollera start- och sluttid.');
+      return;
+    }
+    const person = staff.find(member => String(member.id) === String(personId));
+    const shift = person ? getShiftForDay(person, activeDay, {
+      fridayWeek: activeDay === 'fri' ? currentFridayWeek : 1,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    }) : null;
+    if (!shift) {
+      setQuickError('Personen har inget pass den här dagen.');
+      return;
+    }
+    const type = ASSIGNMENT_TYPE_IDS.includes(quickPosition.type) ? quickPosition.type : 'lesson';
+    const label = quickPosition.label.trim() || inferAssignmentLabel(type);
+    const ok = onAddSchoolPosition?.({
+      personId,
+      dayKey: activeDay,
+      task: {
+        type,
+        label,
+        start,
+        end,
+        durationMinutes: end - start,
+        target: quickPosition.target.trim(),
+        notes: '',
+        mustCover: !!quickPosition.mustCover,
+        releaseForCover: !!quickPosition.releaseForCover,
+        breakFlexibility: defaultBreakFlexibility(type),
+      },
+    });
+    if (!ok) {
+      setQuickError('Kunde inte lägga till positionen.');
+      return;
+    }
+    setQuickPosition(prev => ({
+      ...prev,
+      personId,
+      label: '',
+      target: prev.target,
+    }));
+    setQuickError('');
+  };
 
   return (
     <div className="space-y-5">
@@ -4876,6 +4971,76 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
             <button type="button" onClick={() => onOpenTasksDay(activeDay)} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
               <Briefcase size={14} />Redigera i Uppdrag
             </button>
+          </div>
+          <div className="mb-4 rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
+            <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
+              <div>
+                <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Snabbtillägg</p>
+                <p className="text-sm text-stone-600">Lägg en skolposition direkt här. Den sparas som ett vanligt uppdrag och syns i Drift.</p>
+              </div>
+              {quickError && <span className="text-xs text-rose-700 bg-rose-50 ring-1 ring-rose-200 rounded-full px-2 py-1">{quickError}</span>}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-7 gap-2 items-end">
+              <div className="xl:col-span-2">
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Person</label>
+                <select value={quickPosition.personId || (peopleToShow[0]?.id != null ? String(peopleToShow[0].id) : '')}
+                  onChange={e => updateQuickPosition({ personId: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700">
+                  <option value="">Välj person</option>
+                  {peopleToShow.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Typ</label>
+                <select value={quickPosition.type} onChange={e => updateQuickPosition({
+                    type: e.target.value,
+                    mustCover: assignmentRequiresCoverByDefault(e.target.value),
+                    releaseForCover: assignmentReleaseDefault(e.target.value),
+                  })}
+                  className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700">
+                  {schoolQuickTypes.map(typeId => {
+                    const meta = getAssignmentTypeMeta(typeId);
+                    return <option key={typeId} value={typeId}>{meta.label}</option>;
+                  })}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Start</label>
+                <input value={quickPosition.start} onChange={e => updateQuickPosition({ start: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 tabular-nums" placeholder="08:20" />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Slut</label>
+                <input value={quickPosition.end} onChange={e => updateQuickPosition({ end: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 tabular-nums" placeholder="09:00" />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Grupp/klass</label>
+                <input value={quickPosition.target} onChange={e => updateQuickPosition({ target: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700" placeholder="F-1A" />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Ämne/text</label>
+                <input value={quickPosition.label} onChange={e => updateQuickPosition({ label: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700" placeholder={inferAssignmentLabel(quickPosition.type)} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-3 flex-wrap mt-3">
+              <div className="flex flex-wrap gap-3">
+                <label className="inline-flex items-center gap-2 text-xs text-stone-600">
+                  <input type="checkbox" checked={quickPosition.mustCover} onChange={e => updateQuickPosition({ mustCover: e.target.checked })} />
+                  Måste täckas
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs text-stone-600">
+                  <input type="checkbox" checked={quickPosition.releaseForCover} onChange={e => updateQuickPosition({ releaseForCover: e.target.checked })} />
+                  Flyttbar vid frånvaro
+                </label>
+              </div>
+              <button type="button" onClick={submitQuickPosition}
+                className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+                <Plus size={14} />Lägg skolposition
+              </button>
+            </div>
           </div>
           <div className="flex flex-wrap gap-2 mb-4">
             <div className="flex gap-1 p-1 rounded-xl bg-stone-100">
@@ -6653,6 +6818,7 @@ function DriftView({
   currentFridayWeek,
 }) {
   const [staffQuery, setStaffQuery] = useState('');
+  const [driftRoleFilter, setDriftRoleFilter] = useState('all');
   const [nowMin, setNowMin] = useState(() => {
     const d = new Date();
     return d.getHours() * 60 + d.getMinutes();
@@ -6719,15 +6885,23 @@ function DriftView({
   ), [staff, assignments, departments, dayKey, fridayWeek, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, driftState]);
 
   const normalizedStaffQuery = staffQuery.trim().toLowerCase();
+  const driftRoleMatches = (person) => {
+    const category = getStaffRoleCategory(person);
+    if (driftRoleFilter === 'all') return true;
+    if (driftRoleFilter === 'school') return category === 'teacher' || category === 'support';
+    if (driftRoleFilter === 'support') return category === 'support';
+    return category === driftRoleFilter;
+  };
   const filteredRows = useMemo(() => (
-    normalizedStaffQuery
-      ? rows.filter(row => {
-          const haystack = `${row.person.name} ${row.person.role || ''} ${row.dept.name}`.toLowerCase();
-          return haystack.includes(normalizedStaffQuery);
-        })
-      : rows
-  ), [rows, normalizedStaffQuery]);
+    rows.filter(row => {
+      if (!driftRoleMatches(row.person)) return false;
+      if (!normalizedStaffQuery) return true;
+      const haystack = `${row.person.name} ${getStaffRoleLabel(row.person.employmentRole)} ${row.person.role || ''} ${row.dept.name}`.toLowerCase();
+      return haystack.includes(normalizedStaffQuery);
+    })
+  ), [rows, normalizedStaffQuery, driftRoleFilter]);
   const onShiftRows = rows.filter(row => row.shift);
+  const filteredOnShiftRows = filteredRows.filter(row => row.shift);
   const visibleOnShiftRows = filteredRows.filter(row => row.shift);
   const visibleOffShiftRows = filteredRows.filter(row => !row.shift);
   const absentRows = rows.filter(row => row.isAbsent && row.shift);
@@ -7043,7 +7217,7 @@ function DriftView({
           {nowMin >= driftTimeStart && nowMin <= driftTimeEnd && (
             <div className="absolute top-0 bottom-0 z-10 pointer-events-none" style={{ left: `calc(140px + (100% - 140px) * ${driftPct(nowMin)} / 100)`, width: 2, background: '#D97757' }} />
           )}
-          {onShiftRows.map(row => {
+          {filteredOnShiftRows.map(row => {
             const shiftStart = timeToMin(row.shift[0]);
             const shiftEnd = timeToMin(row.shift[1]);
             const dept = row.dept;
@@ -7081,8 +7255,8 @@ function DriftView({
               </div>
             );
           })}
-          {onShiftRows.length === 0 && (
-            <div className="text-sm text-stone-400 py-8 text-center italic">Inga schemalagda pass den här dagen.</div>
+          {filteredOnShiftRows.length === 0 && (
+            <div className="text-sm text-stone-400 py-8 text-center italic">Inga schemalagda pass matchar filtret den här dagen.</div>
           )}
         </div>
       </div>
@@ -7510,6 +7684,22 @@ function DriftView({
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
               </span>
             </div>
+            <select
+              value={driftRoleFilter}
+              onChange={e => setDriftRoleFilter(e.target.value)}
+              className="mt-2 w-full rounded-md bg-stone-50 px-2 py-1.5 text-sm text-stone-700 ring-1 ring-stone-200 outline-none focus:bg-white focus:ring-stone-400"
+              title="Filtrera Drift efter befattning"
+            >
+              <option value="all">Alla roller</option>
+              <option value="school">Skola: lärare/vikarie/resurs</option>
+              <option value="teacher">Lärare</option>
+              <option value="fritids">Lärare i fritidshem</option>
+              <option value="support">Vikarie/resurs/samverkare</option>
+              <option value="other">Övriga/utan roll</option>
+            </select>
+            <p className="text-[11px] text-stone-400 mt-1">
+              Visar {filteredRows.length} av {rows.length} personer i listan och tidslinjen.
+            </p>
             {(absentRows.length + staleAbsentRows.length) > 0 && (
               <button type="button" onClick={clearAbsences} className="mt-2 text-[11px] text-stone-500 hover:text-stone-800 transition">
                 Rensa all frånvaro
@@ -7548,6 +7738,11 @@ function DriftView({
                 </button>
               );
             })}
+            {filteredRows.length === 0 && (
+              <div className="px-3 py-8 text-center text-sm text-stone-400">
+                Ingen personal matchar filtret.
+              </div>
+            )}
           </div>
         </div>
       </div>
