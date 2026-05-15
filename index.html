@@ -216,6 +216,27 @@ const WEEKDAY_KEYS = DAYS.map(d => d.key);
 const DAY_META = [...DAYS, { key: 'fri', label: 'Fredag', short: 'fre' }];
 const ALL_DAY_KEYS = [...DAYS.map(d => d.key), 'fri'];
 const CONSTRAINT_KEYS = ['earliestStart', 'latestStart', 'earliestEnd', 'latestEnd'];
+const SWEDISH_MONTH_SHORT = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+
+function getCurrentWeekMonday(baseDate = new Date()) {
+  const date = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
+  const day = date.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + mondayOffset);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function getWeekdayDate(dayIndex, baseDate = new Date()) {
+  const date = getCurrentWeekMonday(baseDate);
+  date.setDate(date.getDate() + dayIndex);
+  return date;
+}
+
+function formatDayMonth(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  return `${date.getDate()} ${SWEDISH_MONTH_SHORT[date.getMonth()] || ''}`.trim();
+}
 
 // Standardvärden för alla parametrar — gör koden nedan mer läsbar
 const DEFAULTS = {
@@ -3592,7 +3613,7 @@ function FritidsSchemaApp() {
             <OwlMark size={36} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v56</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v57</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -5901,6 +5922,9 @@ function DriftView({
   const driftPct = (m) => Math.max(0, Math.min(100, ((m - driftTimeStart) / (driftTimeEnd - driftTimeStart)) * 100));
   const presentNow = onShiftRows.filter(row => !row.isAbsent && row.shift && timeToMin(row.shift[0]) <= nowMin && timeToMin(row.shift[1]) >= nowMin).length;
   const dayLabel = getDayMeta(dayKey).label;
+  const driftWeekDates = useMemo(() => DAY_META.map((_, idx) => getWeekdayDate(idx)), []);
+  const activeDayIndex = Math.max(0, DAY_META.findIndex(day => day.key === dayKey));
+  const activeDateLabel = formatDayMonth(driftWeekDates[activeDayIndex]);
 
   return (
     <div className="space-y-3">
@@ -5909,11 +5933,13 @@ function DriftView({
         <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-2 flex gap-1.5 self-start">
           {DAY_META.map((day, idx) => {
             const active = day.key === dayKey;
+            const date = driftWeekDates[idx];
             return (
               <button key={day.key} type="button" onClick={() => setDayKey(day.key)}
-                className={`px-3.5 py-2 rounded-xl flex flex-col items-center gap-0 min-w-[48px] transition ${active ? 'bg-stone-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}>
+                className={`px-3.5 py-2 rounded-xl flex flex-col items-center gap-0 min-w-[54px] transition ${active ? 'bg-stone-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}>
                 <span className="text-[10px] uppercase opacity-70 tracking-wider font-medium">{day.short}</span>
-                <span className="display-font text-base" style={{ fontWeight: 500, lineHeight: 1 }}>{12 + idx}</span>
+                <span className="display-font text-base" style={{ fontWeight: 500, lineHeight: 1 }}>{date.getDate()}</span>
+                <span className="text-[9px] uppercase opacity-60 leading-none mt-0.5">{SWEDISH_MONTH_SHORT[date.getMonth()]}</span>
               </button>
             );
           })}
@@ -5934,7 +5960,7 @@ function DriftView({
             Nu · {minToTime(nowMin)}
           </span>
           <span className="text-xs text-stone-500">
-            Visar {dayLabel.toLowerCase()}. Frånvarande markeras med streck. Kritiska uppdrag är svarta segment.
+            Visar {dayLabel.toLowerCase()} {activeDateLabel}. Frånvarande markeras med streck. Kritiska uppdrag är svarta segment.
           </span>
           {dayKey === 'fri' && (
             <span className="text-xs text-stone-400">Visar fredag v.{currentFridayWeek}</span>
@@ -6191,6 +6217,16 @@ function DriftView({
                         {!breakOk && (
                           <div className="mt-1 text-amber-700">
                             Rast behöver kollas: {selectedCandidate.breakStatus?.label || 'ingen tydlig 30 min rast kvar'}.
+                          </div>
+                        )}
+                        {breakOk && selectedCandidate?.breakStatus?.source === 'gap' && (
+                          <div className="mt-1 text-emerald-700">
+                            Rastförslag: lägg 30 min rast {minToTime(selectedCandidate.breakStatus.start)}–{minToTime(selectedCandidate.breakStatus.end)} om lösningen används.
+                          </div>
+                        )}
+                        {breakOk && selectedCandidate?.breakStatus?.source === 'plannedBreak' && (
+                          <div className="mt-1 text-emerald-700">
+                            Rast: {selectedCandidate.breakStatus.label}.
                           </div>
                         )}
                       </div>
