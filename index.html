@@ -237,6 +237,74 @@ function formatDayMonth(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
   return `${date.getDate()} ${SWEDISH_MONTH_SHORT[date.getMonth()] || ''}`.trim();
 }
+function formatDateKey(date = new Date()) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return formatDateKey(new Date());
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+function parseDateKey(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [y, m, d] = value.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+function addDays(date, days) {
+  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  next.setDate(next.getDate() + days);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+function getDayKeyForDate(date) {
+  const idx = date instanceof Date && !Number.isNaN(date.getTime()) ? date.getDay() : -1;
+  return ({ 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri' })[idx] || '';
+}
+function getDateOffsetFromToday(date, baseDate = new Date()) {
+  const today = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return Math.round((target - today) / 86400000);
+}
+function normalizeDriftDateKey(value, baseDate = new Date()) {
+  const today = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
+  const minDate = today;
+  const maxDate = addDays(today, 30);
+  let date = parseDateKey(value) || today;
+  if (date < minDate) date = minDate;
+  if (date > maxDate) date = maxDate;
+  if (!getDayKeyForDate(date)) {
+    const direction = date.getDay() === 0 ? 1 : 2;
+    const nextWeekday = addDays(date, direction);
+    date = nextWeekday <= maxDate ? nextWeekday : addDays(date, -1);
+  }
+  return formatDateKey(date);
+}
+function isDriftDateKeyInRetention(value, baseDate = new Date()) {
+  const date = parseDateKey(value);
+  if (!date) return false;
+  const offset = getDateOffsetFromToday(date, baseDate);
+  return offset >= -7 && offset <= 30 && !!getDayKeyForDate(date);
+}
+function getDriftDateOptions(baseDate = new Date(), daysAhead = 30) {
+  const today = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
+  const options = [];
+  for (let offset = 0; offset <= daysAhead; offset += 1) {
+    const date = addDays(today, offset);
+    const dayKey = getDayKeyForDate(date);
+    if (dayKey) options.push({ date, dateKey: formatDateKey(date), dayKey, offset });
+  }
+  return options;
+}
+function getFridayWeekForDate(date, currentFridayWeek = 1, cycleWeeks = 8, baseDate = new Date()) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return currentFridayWeek;
+  const baseMonday = getCurrentWeekMonday(baseDate);
+  const targetMonday = getCurrentWeekMonday(date);
+  const weekOffset = Math.round((targetMonday - baseMonday) / (7 * 86400000));
+  const cycle = Math.max(1, Math.min(20, asNumber(cycleWeeks, 8) || 8));
+  return ((currentFridayWeek - 1 + weekOffset) % cycle + cycle) % cycle + 1;
+}
 
 // Standardvärden för alla parametrar — gör koden nedan mer läsbar
 const DEFAULTS = {
@@ -319,7 +387,7 @@ const ASSIGNMENT_TEMPLATES = [
   { id: 'meeting-30', type: 'meeting', label: 'Möte 30 min', duration: 30 },
 ];
 const initialAssignments = {};
-const initialDriftState = { dayKey: 'mon', absences: {}, solutions: {}, templates: {} };
+const initialDriftState = { dayKey: 'mon', selectedDateKey: formatDateKey(new Date()), absences: {}, solutions: {}, templates: {} };
 const WORKFLOW_MODE_GENERATE = 'generate';
 const WORKFLOW_MODE_EXISTING = 'existing';
 const APP_NAV_ITEMS = [
@@ -437,11 +505,32 @@ function assignmentRequiresCoverByDefault(typeId) {
 function assignmentCanReleaseByDefault(typeId) {
   return ['resource', 'planning'].includes(typeId);
 }
+function assignmentIsBreakType(typeId) {
+  return ['break', 'pedLunch'].includes(typeId);
+}
+function defaultBreakFlexibility(typeId) {
+  return assignmentIsBreakType(typeId) ? 'fixed' : '';
+}
+function assignmentReleaseDefault(typeId, breakFlexibility = defaultBreakFlexibility(typeId)) {
+  if (assignmentIsBreakType(typeId)) return breakFlexibility === 'flexible';
+  return assignmentCanReleaseByDefault(typeId);
+}
 function assignmentIsBoundaryType(typeId) {
   return ['opening', 'closing'].includes(typeId);
 }
 function assignmentCountsAsBreak(task) {
-  return ['break', 'pedLunch'].includes(task?.type);
+  return assignmentIsBreakType(task?.type);
+}
+function assignmentIsFixedBreak(task) {
+  return assignmentCountsAsBreak(task) && task.breakFlexibility !== 'flexible';
+}
+function assignmentHasBreakRuleException(task) {
+  return assignmentCountsAsBreak(task) && !!task.breakRuleException;
+}
+function describeLockedOverlap(task) {
+  if (!task) return 'låst uppdrag';
+  if (assignmentIsFixedBreak(task)) return `${task.type === 'pedLunch' ? 'låst pedagogisk lunch' : 'låst rast'} ${minToTime(task.start)}–${minToTime(task.end)}`;
+  return `${task.label || inferAssignmentLabel(task.type)} ${minToTime(task.start)}–${minToTime(task.end)}`;
 }
 function normalizeComparableText(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -1110,6 +1199,9 @@ function normalizeAssignment(item, options = {}) {
   const rawTarget = item.target == null ? '' : String(item.target);
   const rawNotes = item.notes == null ? '' : String(item.notes);
   const rawPreferredCoverPersonId = item.preferredCoverPersonId == null ? '' : String(item.preferredCoverPersonId).trim();
+  const breakFlexibility = assignmentIsBreakType(type)
+    ? (item.breakFlexibility === 'flexible' ? 'flexible' : 'fixed')
+    : '';
   const allowedStaffIds = options.allowedStaffIds instanceof Set ? options.allowedStaffIds : null;
   const ownerId = options.ownerId == null ? '' : String(options.ownerId);
   const preferredCoverPersonId = rawPreferredCoverPersonId
@@ -1128,7 +1220,9 @@ function normalizeAssignment(item, options = {}) {
     notes: rawNotes,
     mustCover: !!item.mustCover,
     preferredCoverPersonId,
-    releaseForCover: item.releaseForCover == null ? assignmentCanReleaseByDefault(type) : !!item.releaseForCover,
+    releaseForCover: item.releaseForCover == null ? assignmentReleaseDefault(type, breakFlexibility) : !!item.releaseForCover,
+    breakFlexibility,
+    breakRuleException: assignmentIsBreakType(type) ? !!item.breakRuleException : false,
   };
 }
 function sortAssignments(list = []) {
@@ -1192,12 +1286,17 @@ function normalizeAssignmentsMap(assignments, staff = [], fridayCycleWeeks = 8) 
   });
   return result;
 }
-function getDriftStateKey(dayKey, fridayWeek = 1, cycleWeeks = 8) {
+function getDriftStateKey(dayKey, fridayWeek = 1, cycleWeeks = 8, dateKey = '') {
+  if (dateKey && parseDateKey(dateKey)) return dateKey;
   if (dayKey !== 'fri') return ALL_DAY_KEYS.includes(dayKey) ? dayKey : initialDriftState.dayKey;
   return `fri:${getFridayAssignmentWeekKey(fridayWeek, cycleWeeks)}`;
 }
 function parseDriftStateKey(key, cycleWeeks = 8) {
   const raw = String(key || '');
+  if (isDriftDateKeyInRetention(raw)) {
+    const date = parseDateKey(raw);
+    return { valid: true, dayKey: getDayKeyForDate(date), fridayWeek: getDayKeyForDate(date) === 'fri' ? null : 1, legacyFriday: false, dateKey: raw };
+  }
   if (ALL_DAY_KEYS.includes(raw)) return { valid: true, dayKey: raw, fridayWeek: raw === 'fri' ? null : 1, legacyFriday: raw === 'fri' };
   const match = raw.match(/^fri:(\d+)$/);
   if (!match) return { valid: false, dayKey: '', fridayWeek: null, legacyFriday: false };
@@ -1206,8 +1305,12 @@ function parseDriftStateKey(key, cycleWeeks = 8) {
   if (!Number.isFinite(week) || week < 1 || week > cycle) return { valid: false, dayKey: '', fridayWeek: null, legacyFriday: false };
   return { valid: true, dayKey: 'fri', fridayWeek: week, legacyFriday: false };
 }
-function readDriftDayBucket(map, dayKey, fridayWeek = 1, cycleWeeks = 8) {
+function readDriftDayBucket(map, dayKey, fridayWeek = 1, cycleWeeks = 8, dateKey = '') {
   const source = map && typeof map === 'object' ? map : {};
+  if (dateKey && source[dateKey]) return source[dateKey];
+  const todayKey = formatDateKey(new Date());
+  const allowLegacyFallback = !dateKey || dateKey === todayKey;
+  if (!allowLegacyFallback) return undefined;
   if (dayKey !== 'fri') return source[dayKey];
   const scopedKey = getDriftStateKey('fri', fridayWeek, cycleWeeks);
   return source[scopedKey] || source.fri;
@@ -1219,7 +1322,7 @@ function normalizeDriftAbsences(absences, staff = [], fridayCycleWeeks = 8) {
   Object.entries(source).forEach(([stateKey, value]) => {
     const parsed = parseDriftStateKey(stateKey, fridayCycleWeeks);
     if (!parsed.valid) return;
-    const cleanStateKey = parsed.legacyFriday ? 'fri' : (parsed.dayKey === 'fri' ? getDriftStateKey('fri', parsed.fridayWeek, fridayCycleWeeks) : parsed.dayKey);
+    const cleanStateKey = parsed.dateKey || (parsed.legacyFriday ? 'fri' : (parsed.dayKey === 'fri' ? getDriftStateKey('fri', parsed.fridayWeek, fridayCycleWeeks) : parsed.dayKey));
     const list = Array.from(new Set(
       (Array.isArray(value) ? value : [])
         .map(id => String(id))
@@ -1236,7 +1339,7 @@ function normalizeDriftSolutions(solutions, staff = [], fridayCycleWeeks = 8) {
   Object.entries(source).forEach(([stateKey, value]) => {
     const parsed = parseDriftStateKey(stateKey, fridayCycleWeeks);
     if (!parsed.valid) return;
-    const cleanStateKey = parsed.legacyFriday ? 'fri' : (parsed.dayKey === 'fri' ? getDriftStateKey('fri', parsed.fridayWeek, fridayCycleWeeks) : parsed.dayKey);
+    const cleanStateKey = parsed.dateKey || (parsed.legacyFriday ? 'fri' : (parsed.dayKey === 'fri' ? getDriftStateKey('fri', parsed.fridayWeek, fridayCycleWeeks) : parsed.dayKey));
     const daySource = value && typeof value === 'object' ? value : {};
     const daySolutions = {};
     Object.entries(daySource).forEach(([taskId, item]) => {
@@ -1311,9 +1414,12 @@ function findDriftTemplateForTask(templates, dayKey, absentPersonId, task, optio
   return Object.values(templates || {}).find(template => template?.matchKey === matchKey) || null;
 }
 function normalizeDriftState(state, staff = [], fridayCycleWeeks = 8) {
-  const dayKey = ALL_DAY_KEYS.includes(state?.dayKey) ? state.dayKey : initialDriftState.dayKey;
+  const selectedDateKey = normalizeDriftDateKey(state?.selectedDateKey || initialDriftState.selectedDateKey);
+  const selectedDayKey = getDayKeyForDate(parseDateKey(selectedDateKey));
+  const dayKey = selectedDayKey || (ALL_DAY_KEYS.includes(state?.dayKey) ? state.dayKey : initialDriftState.dayKey);
   return {
     dayKey,
+    selectedDateKey,
     absences: normalizeDriftAbsences(state?.absences, staff, fridayCycleWeeks),
     solutions: normalizeDriftSolutions(state?.solutions, staff, fridayCycleWeeks),
     templates: normalizeDriftTemplates(state?.templates, staff, fridayCycleWeeks),
@@ -1346,6 +1452,13 @@ function normalizeAssignmentWindows(config, departments = [], coverageBlocks = [
     deptWindows,
   };
 }
+// Hämtar uppdrag för en specifik person + dag.
+// NOTERA – medveten trade-off: uppdrag raderas INTE automatiskt när en person
+// inte längre har ett pass den dagen (t.ex. byter fridayMode från passbank till
+// fixed, eller markerar dagen som ledig). Det är ett medvetet val: man kan
+// experimentera med olika lägen och få tillbaka uppdragen om man ångrar sig.
+// Konsekvens: data lagras kvar i state men är osynlig i alla vyer eftersom
+// dessa itererar över personer som har ett pass den dagen.
 function getAssignmentsForDay(assignments, personId, dayKey, options = {}) {
   const dayValue = assignments?.[String(personId)]?.[dayKey];
   if (dayKey === 'fri') {
@@ -1546,7 +1659,14 @@ function buildCandidateBreakStatus(shift, tasks, intervalStart, intervalEnd, ove
   const remainingTasks = sortAssignments((Array.isArray(tasks) ? tasks : []).filter(task => !overlappingIds.has(String(task.id))));
   const explicitBreakWindows = remainingTasks
     .filter(task => assignmentCountsAsBreak(task) && (task.end - task.start) >= 30)
-    .map(task => ({ start: Math.max(task.start, earliestBreakStart), end: task.end, source: 'plannedBreak' }))
+    .map(task => {
+      const exception = assignmentHasBreakRuleException(task);
+      return {
+        start: exception ? task.start : Math.max(task.start, earliestBreakStart),
+        end: task.end,
+        source: exception ? 'plannedBreakException' : 'plannedBreak',
+      };
+    })
     .filter(task => (task.end - task.start) >= 30);
   const busyIntervals = mergeIntervals([
     ...remainingTasks
@@ -1565,7 +1685,10 @@ function buildCandidateBreakStatus(shift, tasks, intervalStart, intervalEnd, ove
   if (cursor < shiftEnd) openWindows.push({ start: cursor, end: shiftEnd, source: 'gap' });
 
   const windows = [...explicitBreakWindows, ...openWindows]
-    .map(window => ({ ...window, start: Math.max(window.start, earliestBreakStart) }))
+    .map(window => ({
+      ...window,
+      start: window.source === 'plannedBreakException' ? window.start : Math.max(window.start, earliestBreakStart),
+    }))
     .filter(window => (window.end - window.start) >= 30)
     .sort((a, b) => {
       if (a.source !== b.source) return a.source === 'plannedBreak' ? -1 : 1;
@@ -1581,7 +1704,7 @@ function buildCandidateBreakStatus(shift, tasks, intervalStart, intervalEnd, ove
     start: best.start,
     end: suggestedEnd,
     source: best.source,
-    label: `${best.source === 'plannedBreak' ? 'Behåller rast' : 'Möjlig rast'} ${minToTime(best.start)}–${minToTime(suggestedEnd)}`,
+    label: `${best.source === 'plannedBreakException' ? 'Rastundantag' : best.source === 'plannedBreak' ? 'Behåller rast' : 'Möjlig rast'} ${minToTime(best.start)}–${minToTime(suggestedEnd)}`,
   };
 }
 function buildReplacementInsights(candidate, coverTask = null, owner = null) {
@@ -1618,7 +1741,7 @@ function buildReplacementInsights(candidate, coverTask = null, owner = null) {
   }
   if (blockingOverlapping.length > 0) {
     score -= blockingOverlapping.length * 150;
-    reasons.push(`krockar med ${blockingOverlapping[0].label}`);
+    reasons.push(`krockar med ${describeLockedOverlap(blockingOverlapping[0])}`);
   }
   score -= candidate.overlapping.length * 10;
 
@@ -3193,7 +3316,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 11,
+    version: 14,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3464,7 +3587,7 @@ function FritidsSchemaApp() {
       totalOverMinutes: coverageViews.reduce((sum, v) => sum + v.overMinutes, 0),
       primaryCoverageKey: primaryCoverage?.key || COVERAGE_SHARED,
     };
-  }, [staff, activeDay, coverageScopes, currentFridayWeek, fridayCycleWeeks]);
+  }, [staff, activeDay, coverageScopes, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]);
 
   const violations = useMemo(() => {
     const v = [];
@@ -3525,7 +3648,23 @@ function FritidsSchemaApp() {
   }, [staff, fridayCycleWeeks, fridayTemplateRotation]);
 
   const updateStaff = (updated) => setStaff(prev => prev.map(s => s.id === updated.id ? normalizePerson(updated, fridayCycleWeeks) : s));
-  const removeStaff = (id) => setStaff(prev => prev.filter(s => s.id !== id));
+  // När en person raderas städar vi proaktivt alla följdreferenser. Utan detta
+  // hänger dangling refs kvar i React state tills nästa save+reload. DriftView
+  // filtrerar redan vid render, men det är renare att rensa här så att även
+  // AssignmentsView slipper död data och så att sparbara driftmallar inte
+  // tyst försvinner mellan klick.
+  const removeStaff = (id) => {
+    const idStr = String(id);
+    const remainingStaff = staff.filter(s => s.id !== id);
+    setStaff(remainingStaff);
+    setAssignments(prev => {
+      if (!prev || typeof prev !== 'object' || !(idStr in prev)) return prev;
+      const next = { ...prev };
+      delete next[idStr];
+      return next;
+    });
+    setDriftState(prev => normalizeDriftState(prev, remainingStaff, fridayCycleWeeks));
+  };
 
   // Direktredigering från schemavyn: uppdaterar EN persons pass på EN dag.
   // Hanterar alla fyra fredagslägen så att klick-redigering på fredagen
@@ -3747,11 +3886,11 @@ function FritidsSchemaApp() {
       <div className="flex min-h-screen w-full">
         {/* Sidebar navigation */}
         <aside className="w-56 shrink-0 bg-[#FDFCFA] border-r border-stone-200 flex flex-col py-4 px-3 sticky top-0 h-screen overflow-y-auto">
-          <div className="flex items-center gap-3 px-2 mb-5">
-            <OwlMark size={36} />
+          <div className="flex items-center gap-3.5 px-2 mb-5">
+            <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v61</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v66</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -3780,7 +3919,11 @@ function FritidsSchemaApp() {
             <button onClick={() => setShowWelcome(true)} className="flex items-center gap-2 text-xs text-stone-500 hover:text-stone-800 transition">
               <HelpCircle size={14} />Hjälp & guidad tur
             </button>
-            <p className="text-[10px] text-stone-400 leading-relaxed">© 2026 Andreas Jonsson<br />42 Improbable Owls · prototyp</p>
+            <p className="text-[10px] text-stone-400 leading-relaxed">
+              © 2026 Andreas Jonsson<br />
+              42 Improbable Owls · prototyp<br />
+              I samarbete med Madeleine Ljunglöf, förstelärare, Björneborgs skola
+            </p>
           </div>
         </aside>
         {/* Main column */}
@@ -3922,7 +4065,7 @@ function FritidsSchemaApp() {
 
         <footer className="mt-10 pt-6 border-t border-stone-200 text-xs text-stone-500 flex justify-between items-start gap-4 flex-wrap">
           <span>Klicka på en person för att redigera detaljer. Tryck "Generera schemaförslag" när du vill att appen pusslar fram alternativ baserat på allas villkor.</span>
-          <span className="text-stone-400 whitespace-nowrap">© 2026 Andreas Jonsson · Alla rättigheter förbehållna</span>
+          <span className="text-stone-400">© 2026 Andreas Jonsson · I samarbete med Madeleine Ljunglöf, förstelärare, Björneborgs skola</span>
         </footer>
           </div>
         </div>
@@ -5740,7 +5883,14 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
             return (
               <div key={person.id} className="grid grid-cols-[220px,1fr,110px] gap-3 px-4 py-3 items-center hover:bg-stone-50/60">
                 <div className="min-w-0">
-                  <p className="text-sm text-stone-800 truncate" style={{ fontWeight: 500 }}>{person.name}</p>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <p className="text-sm text-stone-800 truncate" style={{ fontWeight: 500 }}>{person.name}</p>
+                    {activeDay === 'fri' && (
+                      <span className="shrink-0 rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-800 ring-1 ring-sky-200">
+                        Fredag v.{currentFridayWeek}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1.5 mt-1 text-xs text-stone-500">
                     <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: dept.color }} />
                     <span className="truncate">{dept.name}</span>
@@ -5848,6 +5998,11 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                                 <span className="tabular-nums">{minToTime(task.start)}–{minToTime(task.end)}</span>
                                 <span>{label}</span>
                                 {assignmentIsBoundaryType(task.type) && <span>· ansvar</span>}
+                                {assignmentCountsAsBreak(task) && (
+                                  <span>· {task.breakFlexibility === 'flexible' ? 'flexibel' : 'fast'}</span>
+                                )}
+                                {assignmentHasBreakRuleException(task) && <span>· undantag</span>}
+                                {!assignmentCountsAsBreak(task) && !task.releaseForCover && <span>· låst</span>}
                               </span>
                             );
                           })}
@@ -5905,14 +6060,27 @@ function DriftView({
     const t = setInterval(tick, 60000);
     return () => clearInterval(t);
   }, []);
-  const dayKey = ALL_DAY_KEYS.includes(driftState?.dayKey) ? driftState.dayKey : 'mon';
-  const fridayWeek = dayKey === 'fri' ? currentFridayWeek : 1;
-  const fridayOptions = { fridayWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation };
-  const driftStateKey = getDriftStateKey(dayKey, fridayWeek, fridayCycleWeeks);
-  const dayAbsences = readDriftDayBucket(driftState?.absences, dayKey, fridayWeek, fridayCycleWeeks);
+  const driftDateOptions = useMemo(() => getDriftDateOptions(), []);
+  const driftDateMin = driftDateOptions[0]?.dateKey || formatDateKey(new Date());
+  const driftDateMax = formatDateKey(addDays(new Date(), 30));
+  const selectedDateKey = normalizeDriftDateKey(driftState?.selectedDateKey || driftDateMin);
+  const selectedDate = parseDateKey(selectedDateKey) || new Date();
+  const dayKey = getDayKeyForDate(selectedDate) || (ALL_DAY_KEYS.includes(driftState?.dayKey) ? driftState.dayKey : 'mon');
+  const fridayWeek = dayKey === 'fri'
+    ? getFridayWeekForDate(selectedDate, currentFridayWeek, fridayCycleWeeks)
+    : 1;
+  // Memoiseras så att downstream useMemo:s inte räknas om vid varje render
+  // bara för att object-referensen är ny. Beroenden inkluderar alla fält
+  // som faktiskt påverkar utfallet.
+  const fridayOptions = useMemo(
+    () => ({ fridayWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation }),
+    [fridayWeek, fridayCycleWeeks, fridayTemplateRotation]
+  );
+  const driftStateKey = getDriftStateKey(dayKey, fridayWeek, fridayCycleWeeks, selectedDateKey);
+  const dayAbsences = readDriftDayBucket(driftState?.absences, dayKey, fridayWeek, fridayCycleWeeks, selectedDateKey);
   const absentIds = Array.isArray(dayAbsences) ? dayAbsences : [];
   const absentSet = new Set(absentIds.map(id => String(id)));
-  const scopedDaySolutions = readDriftDayBucket(driftState?.solutions, dayKey, fridayWeek, fridayCycleWeeks);
+  const scopedDaySolutions = readDriftDayBucket(driftState?.solutions, dayKey, fridayWeek, fridayCycleWeeks, selectedDateKey);
   const daySolutions = scopedDaySolutions && typeof scopedDaySolutions === 'object'
     ? scopedDaySolutions
     : {};
@@ -5994,18 +6162,40 @@ function DriftView({
   const lostTasks = absentRows.reduce((sum, row) => sum + row.tasks.length, 0);
   const urgentCount = openCoverTasks.length + gapIssues.length;
 
+  // Map över redan tilldelade vikarier denna dag → [{ taskId, start, end }].
+  // Används vid render av kandidatlistor för att flagga personer som inte
+  // kan ta ett till uppdrag eftersom de redan täcker något överlappande.
+  const existingCoverIntervals = useMemo(() => {
+    const map = new Map();
+    Object.entries(daySolutions || {}).forEach(([taskId, sol]) => {
+      if (!sol || !sol.coverPersonId) return;
+      const taskItem = lostCoverTasks.find(item => String(item.task.id) === taskId);
+      if (!taskItem) return;
+      const key = String(sol.coverPersonId);
+      const list = map.get(key) || [];
+      list.push({ taskId, start: taskItem.task.start, end: taskItem.task.end });
+      map.set(key, list);
+    });
+    return map;
+  }, [daySolutions, lostCoverTasks]);
+
   const resolveCoverTask = (task, absentPerson, coverPersonId) => {
     setDriftState(prev => {
       const taskId = String(task.id);
       const previousSolutions = (prev && prev.solutions && typeof prev.solutions === 'object') ? prev.solutions : {};
+      // Legacy-städning: i tidiga versioner lagrades fredagens solutions under
+      // bara nyckeln `fri` (utan veckonummer). Nu använder vi `fri:N`. Tar
+      // explicit bort den gamla nyckeln när vi skriver fredagsdata.
+      const cleanedSolutions = { ...previousSolutions };
+      if (dayKey === 'fri') delete cleanedSolutions.fri;
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
+        selectedDateKey,
         solutions: {
-          ...previousSolutions,
-          ...(dayKey === 'fri' ? { fri: undefined } : {}),
+          ...cleanedSolutions,
           [driftStateKey]: {
-            ...(readDriftDayBucket(previousSolutions, dayKey, fridayWeek, fridayCycleWeeks) || {}),
+            ...(readDriftDayBucket(previousSolutions, dayKey, fridayWeek, fridayCycleWeeks, selectedDateKey) || {}),
             [taskId]: {
               taskId,
               absentPersonId: String(absentPerson.id),
@@ -6021,7 +6211,7 @@ function DriftView({
   const clearCoverTaskSolution = (taskId) => {
     setDriftState(prev => {
       const previousSolutions = (prev && prev.solutions && typeof prev.solutions === 'object') ? prev.solutions : {};
-      const nextDaySolutions = { ...(readDriftDayBucket(previousSolutions, dayKey, fridayWeek, fridayCycleWeeks) || {}) };
+      const nextDaySolutions = { ...(readDriftDayBucket(previousSolutions, dayKey, fridayWeek, fridayCycleWeeks, selectedDateKey) || {}) };
       delete nextDaySolutions[String(taskId)];
       const nextSolutions = { ...previousSolutions };
       if (dayKey === 'fri') delete nextSolutions.fri;
@@ -6030,6 +6220,7 @@ function DriftView({
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
+        selectedDateKey,
         solutions: nextSolutions,
       }, staff, fridayCycleWeeks);
     });
@@ -6045,6 +6236,7 @@ function DriftView({
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
+        selectedDateKey,
         templates: {
           ...currentTemplates,
           [id]: {
@@ -6072,6 +6264,7 @@ function DriftView({
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
+        selectedDateKey,
         templates: nextTemplates,
       }, staff, fridayCycleWeeks);
     });
@@ -6080,15 +6273,15 @@ function DriftView({
   const toggleAbsent = (personId) => {
     setDriftState(prev => {
       const previousAbsences = (prev && prev.absences && typeof prev.absences === 'object') ? prev.absences : {};
-      const currentDayBucket = readDriftDayBucket(previousAbsences, dayKey, fridayWeek, fridayCycleWeeks);
+      const currentDayBucket = readDriftDayBucket(previousAbsences, dayKey, fridayWeek, fridayCycleWeeks, selectedDateKey);
       const currentDay = Array.isArray(currentDayBucket) ? currentDayBucket : [];
       const id = String(personId);
       const nextDay = currentDay.includes(id)
         ? currentDay.filter(existingId => existingId !== id)
         : [...currentDay, id];
       const nextSolutions = { ...((prev && prev.solutions) || {}) };
-      if (currentDay.includes(id) && readDriftDayBucket(nextSolutions, dayKey, fridayWeek, fridayCycleWeeks)) {
-        const currentSolutions = readDriftDayBucket(nextSolutions, dayKey, fridayWeek, fridayCycleWeeks) || {};
+      if (currentDay.includes(id) && readDriftDayBucket(nextSolutions, dayKey, fridayWeek, fridayCycleWeeks, selectedDateKey)) {
+        const currentSolutions = readDriftDayBucket(nextSolutions, dayKey, fridayWeek, fridayCycleWeeks, selectedDateKey) || {};
         const kept = Object.fromEntries(
           Object.entries(currentSolutions).filter(([, solution]) => String(solution.absentPersonId) !== id)
         );
@@ -6103,6 +6296,7 @@ function DriftView({
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
+        selectedDateKey,
         absences: nextAbsences,
         solutions: nextSolutions,
       }, staff, fridayCycleWeeks);
@@ -6122,18 +6316,25 @@ function DriftView({
       return normalizeDriftState({
         ...(prev || initialDriftState),
         dayKey,
+        selectedDateKey,
         absences: nextAbsences,
         solutions: nextSolutions,
       }, staff, fridayCycleWeeks);
     });
   };
 
-  const setDayKey = (nextDayKey) => setDriftState(prev => normalizeDriftState({
-    ...(prev || initialDriftState),
-    dayKey: nextDayKey,
-    absences: (prev && prev.absences) || {},
-    solutions: (prev && prev.solutions) || {},
-  }, staff, fridayCycleWeeks));
+  const setSelectedDateKey = (nextDateKey) => {
+    const normalizedDateKey = normalizeDriftDateKey(nextDateKey);
+    const normalizedDate = parseDateKey(normalizedDateKey);
+    setDriftState(prev => normalizeDriftState({
+      ...(prev || initialDriftState),
+      selectedDateKey: normalizedDateKey,
+      dayKey: getDayKeyForDate(normalizedDate) || dayKey,
+      absences: (prev && prev.absences) || {},
+      solutions: (prev && prev.solutions) || {},
+      templates: (prev && prev.templates) || {},
+    }, staff, fridayCycleWeeks));
+  };
 
   if (staff.length === 0) {
     return (
@@ -6151,11 +6352,11 @@ function DriftView({
   const driftHours = [6,7,8,9,10,11,12,13,14,15,16,17,18];
   const driftTimeStart = 360, driftTimeEnd = 1080;
   const driftPct = (m) => Math.max(0, Math.min(100, ((m - driftTimeStart) / (driftTimeEnd - driftTimeStart)) * 100));
+  const isSelectedDateToday = selectedDateKey === formatDateKey(new Date());
   const presentNow = onShiftRows.filter(row => !row.isAbsent && row.shift && timeToMin(row.shift[0]) <= nowMin && timeToMin(row.shift[1]) >= nowMin).length;
   const dayLabel = getDayMeta(dayKey).label;
-  const driftWeekDates = useMemo(() => DAY_META.map((_, idx) => getWeekdayDate(idx)), []);
-  const activeDayIndex = Math.max(0, DAY_META.findIndex(day => day.key === dayKey));
-  const activeDateLabel = formatDayMonth(driftWeekDates[activeDayIndex]);
+  const activeDateLabel = formatDayMonth(selectedDate);
+  const quickDateOptions = driftDateOptions.slice(0, 7);
   const dayDriftTemplates = Object.values(driftTemplates)
     .filter(template => template.dayKey === dayKey && (dayKey !== 'fri' || String(template.fridayWeek || 1) === String(fridayWeek)))
     .sort((a, b) => {
@@ -6169,12 +6370,27 @@ function DriftView({
     <div className="space-y-3">
       {/* Day picker + KPI strip */}
       <div className="grid grid-cols-1 xl:grid-cols-[auto,1fr] gap-3 items-stretch">
-        <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-2 flex gap-1.5 self-start">
-          {DAY_META.map((day, idx) => {
-            const active = day.key === dayKey;
-            const date = driftWeekDates[idx];
+        <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-3 self-start">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider font-semibold text-stone-500">Driftdatum</div>
+              <div className="text-[11px] text-stone-500">Idag till 30 dagar framåt</div>
+            </div>
+            <input
+              type="date"
+              value={selectedDateKey}
+              min={driftDateMin}
+              max={driftDateMax}
+              onChange={e => setSelectedDateKey(e.target.value)}
+              className="rounded-lg bg-stone-50 px-2 py-1.5 text-xs text-stone-700 ring-1 ring-stone-200 outline-none focus:bg-white focus:ring-stone-400"
+            />
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+          {quickDateOptions.map(({ date, dateKey, dayKey: optionDayKey }) => {
+            const active = dateKey === selectedDateKey;
+            const day = getDayMeta(optionDayKey);
             return (
-              <button key={day.key} type="button" onClick={() => setDayKey(day.key)}
+              <button key={dateKey} type="button" onClick={() => setSelectedDateKey(dateKey)}
                 className={`px-3.5 py-2 rounded-xl flex flex-col items-center gap-0 min-w-[54px] transition ${active ? 'bg-stone-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}>
                 <span className="text-[10px] uppercase opacity-70 tracking-wider font-medium">{day.short}</span>
                 <span className="display-font text-base" style={{ fontWeight: 500, lineHeight: 1 }}>{date.getDate()}</span>
@@ -6182,9 +6398,10 @@ function DriftView({
               </button>
             );
           })}
+          </div>
         </div>
         <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-          <DriftKpi label="På pass nu" value={presentNow} sub={`av ${onShiftRows.length} schemalagda ${dayLabel.toLowerCase()}`} />
+          <DriftKpi label={isSelectedDateToday ? 'På pass nu' : 'På pass'} value={isSelectedDateToday ? presentNow : onShiftRows.length} sub={`av ${onShiftRows.length} schemalagda ${dayLabel.toLowerCase()}`} />
           <DriftKpi label="Frånvarande" value={absentRows.length + staleAbsentRows.length} sub="markerade här i Drift" tone={(absentRows.length + staleAbsentRows.length) > 0 ? 'amber' : 'emerald'} />
           <DriftKpi label="Akut att täcka" value={urgentCount} sub="olösta uppdrag + bemanningsluckor" tone={urgentCount > 0 ? 'rose' : 'emerald'} highlight={urgentCount > 0} />
           <DriftKpi label="Påverkade uppdrag" value={lostTasks} sub="ligger på frånvarande" tone={lostTasks > 0 ? 'amber' : 'emerald'} />
@@ -6196,13 +6413,13 @@ function DriftView({
         <div className="flex items-center gap-3 mb-3 flex-wrap">
           <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium" style={{ background: '#FBEFE7', color: '#D97757', boxShadow: 'inset 0 0 0 1px #D9775744' }}>
             <span className="w-1.5 h-1.5 rounded-full bg-[#D97757]" style={{ animation: 'driftPulse 2s infinite' }} />
-            Nu · {minToTime(nowMin)}
+            {isSelectedDateToday ? `Nu · ${minToTime(nowMin)}` : 'Planerad drift'}
           </span>
           <span className="text-xs text-stone-500">
             Visar {dayLabel.toLowerCase()} {activeDateLabel}. Frånvarande markeras med streck. Kritiska uppdrag är svarta segment.
           </span>
           {dayKey === 'fri' && (
-            <span className="text-xs text-stone-400">Visar fredag v.{currentFridayWeek}</span>
+            <span className="text-xs text-stone-400">Visar fredag v.{fridayWeek}</span>
           )}
         </div>
         {/* hour ruler */}
@@ -6341,6 +6558,16 @@ function DriftView({
                 ? [...(candidates.free || []), ...(candidates.busy || [])]
                     .find(candidate => String(candidate.person.id) === String(savedTemplate.coverPersonId))
                 : null;
+              const savedTemplateCovers = savedTemplateCandidate
+                ? (existingCoverIntervals.get(String(savedTemplateCandidate.person.id)) || [])
+                : [];
+              const savedTemplateAlreadyBusy = savedTemplateCandidate
+                ? savedTemplateCovers.some(c => c.taskId !== String(task.id) && intervalsOverlap(c.start, c.end, task.start, task.end))
+                : false;
+              const savedTemplateLockedConflict = savedTemplateCandidate
+                ? (savedTemplateCandidate.blockingOverlapping || []).length > 0
+                : false;
+              const savedTemplateBlocked = savedTemplateAlreadyBusy || savedTemplateLockedConflict;
               // Smart-sort: samma avdelning först, sedan score, sedan free vs busy
               const allCands = [...(candidates.free || []), ...(candidates.busy || [])];
               const sortedCands = allCands.slice().sort((a, b) => {
@@ -6393,9 +6620,15 @@ function DriftView({
                           <button
                             type="button"
                             onClick={() => resolveCoverTask(task, person, savedTemplate.coverPersonId)}
-                            className="rounded-full px-2 py-0.5 text-[10.5px] font-semibold bg-sky-900 text-white hover:bg-sky-950 transition"
+                            disabled={savedTemplateBlocked}
+                            className={`rounded-full px-2 py-0.5 text-[10.5px] font-semibold transition ${savedTemplateBlocked ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 'bg-sky-900 text-white hover:bg-sky-950'}`}
+                            title={savedTemplateAlreadyBusy
+                              ? 'Mallen krockar med en redan vald vikarielösning.'
+                              : savedTemplateLockedConflict
+                                ? `Mallen krockar med ${describeLockedOverlap(savedTemplateCandidate.blockingOverlapping[0])}.`
+                                : 'Använd den sparade mallen'}
                           >
-                            Använd mall
+                            {savedTemplateBlocked ? 'Mallen krockar' : 'Använd mall'}
                           </button>
                         )}
                         <button
@@ -6418,19 +6651,35 @@ function DriftView({
                         const breakOk = cand.breakStatus?.hasThirtyMinuteBreak !== false;
                         const releasable = (cand.releasableOverlapping || []).length;
                         const blocking = (cand.blockingOverlapping || []).length;
-                        // Fit label: prioritize sameDept + free, then free, then conflict
-                        const fit = (cand.sameDept && isFree) ? { label: 'Bra match', color: '#047857', ring: '#04785766' }
+                        const lockedConflict = blocking > 0;
+                        // Konfliktkontroll: är personen redan tilldelad som vikarie
+                        // till ett annat överlappande uppdrag denna dag?
+                        const personCovers = existingCoverIntervals.get(String(cand.person.id)) || [];
+                        const conflictWithOtherCover = personCovers.some(c =>
+                          c.taskId !== String(task.id) && intervalsOverlap(c.start, c.end, task.start, task.end)
+                        );
+                        const selectionBlocked = conflictWithOtherCover || lockedConflict;
+                        // Fit label: prioritera sameDept + free, sedan free, sedan
+                        // existing cover-konflikt (mest restriktivt), sedan kan släppa, sedan konflikt
+                        const fit = (cand.sameDept && isFree && !selectionBlocked) ? { label: 'Bra match', color: '#047857', ring: '#04785766' }
+                                  : conflictWithOtherCover ? { label: 'Redan upptagen', color: '#9F1239', ring: '#FECDD3' }
+                                  : lockedConflict ? { label: 'Låst krock', color: '#9F1239', ring: '#FECDD3' }
                                   : isFree ? { label: 'Ledig', color: '#475569', ring: '#E7E5E4' }
                                   : (releasable > 0 && blocking === 0) ? { label: 'Kan släppa annat', color: '#B45309', ring: '#FDE68A' }
                                   : { label: 'Konflikt', color: '#A8A29E', ring: '#E7E5E4' };
                         const isSavedTemplateCandidate = savedTemplate && String(savedTemplate.coverPersonId) === String(cand.person.id);
+                        const hasBreakException = cand.breakStatus?.source === 'plannedBreakException';
                         // Build reason line
                         const reasonParts = [];
                         if (cand.preferredCoverMatch) reasonParts.push('Förstahandsersättare');
-                        if (isFree) {
+                        if (conflictWithOtherCover) {
+                          reasonParts.push('Redan vald som vikarie för annat uppdrag denna stund');
+                        } else if (isFree) {
                           reasonParts.push('På pass · ledig på passet');
                         } else if (releasable > 0 && blocking === 0) {
                           reasonParts.push(`Släpper ${releasable} uppdrag (resurs/planering)`);
+                        } else if (lockedConflict) {
+                          reasonParts.push(`Krockar med ${describeLockedOverlap(cand.blockingOverlapping[0])}`);
                         } else {
                           reasonParts.push(`Krockar med ${cand.overlapping.length} uppdrag`);
                         }
@@ -6460,6 +6709,11 @@ function DriftView({
                                     <AlertCircle size={9} />rast
                                   </span>
                                 )}
+                                {hasBreakException && (
+                                  <span className="inline-flex items-center rounded-full px-1.5 py-0 text-[9.5px] font-semibold bg-amber-50 text-amber-800 ring-1 ring-amber-200" title={cand.breakStatus?.label || 'Rastundantag'}>
+                                    rastundantag
+                                  </span>
+                                )}
                               </div>
                               <div className="text-[10.5px] text-stone-500 truncate">{reason}</div>
                             </div>
@@ -6468,8 +6722,13 @@ function DriftView({
                               <button
                                 type="button"
                                 onClick={() => resolveCoverTask(task, person, cand.person.id)}
-                                className="rounded-full px-2 py-0.5 text-[10.5px] font-semibold bg-stone-800 text-white hover:bg-stone-900 transition"
-                                title={`Markera att ${cand.person.name} täcker ${task.label || meta.label}`}
+                                disabled={selectionBlocked}
+                                className={`rounded-full px-2 py-0.5 text-[10.5px] font-semibold transition ${selectionBlocked ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 'bg-stone-800 text-white hover:bg-stone-900'}`}
+                                title={conflictWithOtherCover
+                                  ? `${cand.person.name} är redan vald som vikarie för ett överlappande uppdrag.`
+                                  : lockedConflict
+                                    ? `${cand.person.name} krockar med ${describeLockedOverlap(cand.blockingOverlapping[0])}.`
+                                  : `Markera att ${cand.person.name} täcker ${task.label || meta.label}`}
                               >
                                 Välj
                               </button>
@@ -6537,7 +6796,7 @@ function DriftView({
                           </div>
                         ) : (
                           <div>
-                            <span style={{ fontWeight: 600, color: '#BE123C' }}>Konsekvens:</span> Krockar med {blockingTasks.map(item => `${item.label || inferAssignmentLabel(item.type)} ${minToTime(item.start)}–${minToTime(item.end)}`).join(', ') || `${selectedCandidate.overlapping.length} uppdrag`}. Kontrollera innan lösningen används.
+                            <span style={{ fontWeight: 600, color: '#BE123C' }}>Konsekvens:</span> Krockar med {blockingTasks.map(item => describeLockedOverlap(item)).join(', ') || `${selectedCandidate.overlapping.length} uppdrag`}. Kontrollera innan lösningen används.
                           </div>
                         )}
                         {!breakOk && (
@@ -6553,6 +6812,11 @@ function DriftView({
                         {breakOk && selectedCandidate?.breakStatus?.source === 'plannedBreak' && (
                           <div className="mt-1 text-emerald-700">
                             Rast: {selectedCandidate.breakStatus.label}.
+                          </div>
+                        )}
+                        {breakOk && selectedCandidate?.breakStatus?.source === 'plannedBreakException' && (
+                          <div className="mt-1 text-amber-700">
+                            Rastundantag: {selectedCandidate.breakStatus.label}. Kontrollera med lokala rutiner om lösningen används.
                           </div>
                         )}
                       </div>
@@ -6808,7 +7072,8 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
       notes: '',
       mustCover: assignmentRequiresCoverByDefault(type),
       preferredCoverPersonId: '',
-      releaseForCover: assignmentCanReleaseByDefault(type),
+      breakFlexibility: defaultBreakFlexibility(type),
+      releaseForCover: assignmentReleaseDefault(type),
       durationMinutes: options.lockDuration ? duration : null,
     });
     setDraftTasks(prev => [item, ...prev]);
@@ -6828,6 +7093,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
                 label: inferAssignmentLabel(type),
                 mustCover: true,
                 releaseForCover: false,
+                breakFlexibility: defaultBreakFlexibility(type),
                 start,
                 end,
                 durationMinutes: duration,
@@ -6846,6 +7112,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
         mustCover: true,
         preferredCoverPersonId: '',
         releaseForCover: false,
+        breakFlexibility: defaultBreakFlexibility(type),
         durationMinutes: duration,
       });
       return item ? sortAssignments([item, ...prev]) : prev;
@@ -6875,7 +7142,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
       <div className="bg-[#FCFAF7] rounded-3xl shadow-2xl w-full max-w-4xl max-h-[92vh] overflow-hidden ring-1 ring-black/5 flex flex-col">
         <div className="px-6 py-5 border-b border-stone-200 bg-white/85 backdrop-blur-sm flex items-start justify-between gap-4 flex-shrink-0">
           <div>
-            <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Uppdrag · {getDayMeta(dayKey).label}</p>
+            <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Uppdrag · {getDayMeta(dayKey).label}{dayKey === 'fri' ? ` v.${currentFridayWeek}` : ''}</p>
             <h3 className="display-font text-2xl text-stone-800">{person.name}</h3>
             <p className="text-sm text-stone-500 mt-1">
               {shift ? `Arbetspass ${shift[0]}–${shift[1]}` : 'Inget arbetspass registrerat den här dagen ännu'}
@@ -7135,7 +7402,8 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
                               type: nextType,
                               label: task.label === inferAssignmentLabel(task.type) ? inferAssignmentLabel(nextType) : task.label,
                               mustCover: assignmentRequiresCoverByDefault(nextType),
-                              releaseForCover: assignmentCanReleaseByDefault(nextType),
+                              breakFlexibility: defaultBreakFlexibility(nextType),
+                              releaseForCover: assignmentReleaseDefault(nextType),
                             });
                           }}>
                           {ASSIGNMENT_TYPES.map(type => (
@@ -7189,13 +7457,54 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
                         <p className="text-[10px] text-stone-400 mt-1">Bra när du redan vet vem som brukar ta passet om just det här uppdraget faller bort.</p>
                       </div>
                       <div className="md:col-span-3">
-                        <Toggle
-                          checked={task.releaseForCover}
-                          onChange={(checked) => updateTask(task.id, { releaseForCover: checked })}
-                          label="Kan släppas för att täcka annat"
-                          hint="Passar ofta för resurs eller planering. Drift prioriterar då uppdraget som lättare att flytta vid akut frånvaro."
-                        />
+                        <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Flyttbarhet i Drift</label>
+                        <select
+                          className="task-input w-full"
+                          value={task.releaseForCover ? 'movable' : 'locked'}
+                          disabled={assignmentCountsAsBreak(task)}
+                          onChange={e => updateTask(task.id, { releaseForCover: e.target.value === 'movable' })}
+                        >
+                          <option value="locked">Låst tid / kan inte flyttas</option>
+                          <option value="movable">Flyttbar vid akut frånvaro</option>
+                        </select>
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          {assignmentCountsAsBreak(task)
+                            ? 'Styrs av rastläget här nedanför.'
+                            : 'Låsta uppdrag blockerar ersättarförslag. Flyttbara uppdrag kan Drift föreslå att släppa.'}
+                        </p>
                       </div>
+                      {assignmentCountsAsBreak(task) && (
+                        <div className="md:col-span-3">
+                          <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Rastläge</label>
+                          <select
+                            className="task-input w-full"
+                            value={task.breakFlexibility === 'flexible' ? 'flexible' : 'fixed'}
+                            onChange={e => {
+                              const mode = e.target.value;
+                              updateTask(task.id, {
+                                breakFlexibility: mode,
+                                releaseForCover: mode === 'flexible',
+                              });
+                            }}
+                          >
+                            <option value="fixed">Fast/låst tid</option>
+                            <option value="flexible">Flexibel rasttid</option>
+                          </select>
+                          <p className="text-[10px] text-stone-400 mt-1">
+                            Fast tid får inte flyttas. Flexibel rast kan flyttas, men Drift kontrollerar att 30 min rast fortfarande finns kvar.
+                          </p>
+                        </div>
+                      )}
+                      {assignmentCountsAsBreak(task) && (
+                        <div className="md:col-span-6">
+                          <Toggle
+                            checked={!!task.breakRuleException}
+                            onChange={(checked) => updateTask(task.id, { breakRuleException: checked })}
+                            label="Godkänn som undantag från 5-timmarsregeln"
+                            hint="Använd sparsamt när verkligheten kräver fast lunch/rast tidigare eller senare än regeln. Drift visar då rastundantag i förslaget."
+                          />
+                        </div>
+                      )}
                       <div className="md:col-span-6">
                         <Toggle
                           checked={task.mustCover}
