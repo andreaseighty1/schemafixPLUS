@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="sv">
 <head>
 <meta charset="UTF-8" />
@@ -38,7 +38,7 @@ Källkod, struktur och innehåll får inte kopieras eller spridas utan tillstån
 // Vi bygger en React-komponent som tar size/className/fill/style etc precis som lucide-react.
 (function() {
   const { createElement: h } = React;
-  const iconNames = ['AlertCircle', 'Clock', 'Users', 'Calendar', 'CheckCircle2', 'ChevronRight', 'Edit3', 'Sparkles', 'X', 'Plus', 'Trash2', 'Wand2', 'Settings', 'Download', 'Upload', 'Circle', 'HelpCircle', 'ArrowRight', 'Printer', 'Briefcase'];
+  const iconNames = ['AlertCircle', 'Clock', 'Users', 'Calendar', 'CheckCircle2', 'ChevronRight', 'Edit3', 'Sparkles', 'X', 'Plus', 'Trash2', 'Wand2', 'Settings', 'Download', 'Upload', 'Circle', 'HelpCircle', 'ArrowRight', 'Printer', 'Briefcase', 'Layers', 'Repeat', 'Building2', 'Menu'];
   const defaultSvgAttrs = {
     xmlns: 'http://www.w3.org/2000/svg',
     viewBox: '0 0 24 24',
@@ -82,7 +82,7 @@ Källkod, struktur och innehåll får inte kopieras eller spridas utan tillstån
 
 <script type="text/babel" data-presets="react">
 // Plocka ut ikon-komponenterna så att resten av koden kan använda dem direkt
-const { AlertCircle, Clock, Users, Calendar, CheckCircle2, ChevronRight, Edit3, Sparkles, X, Plus, Trash2, Wand2, Settings, Download, Upload, Circle, HelpCircle, ArrowRight, Printer, Briefcase } = window.__icons;
+const { AlertCircle, Clock, Users, Calendar, CheckCircle2, ChevronRight, Edit3, Sparkles, X, Plus, Trash2, Wand2, Settings, Download, Upload, Circle, HelpCircle, ArrowRight, Printer, Briefcase, Layers, Repeat, Building2, Menu } = window.__icons;
 const { useState, useMemo, useEffect, useRef } = React;
 
 
@@ -273,6 +273,7 @@ const ASSIGNMENT_TYPES = [
   { id: 'yard', label: 'Rastvärd', color: '#ea580c', short: 'Rastvärd' },
   { id: 'collab', label: 'Samverkan', color: '#2563eb', short: 'Samverkan' },
   { id: 'resource', label: 'Resurs', color: '#d946ef', short: 'Resurs' },
+  { id: 'prep', label: 'Förberedelsetid', color: '#be123c', short: 'Förber.' },
   { id: 'planning', label: 'Planering', color: '#64748b', short: 'Planering' },
   { id: 'meeting', label: 'Möte', color: '#b45309', short: 'Möte' },
   { id: 'other', label: 'Övrigt', color: '#6b7280', short: 'Övrigt' },
@@ -301,12 +302,22 @@ const initialDriftState = { dayKey: 'mon', absences: {} };
 const WORKFLOW_MODE_GENERATE = 'generate';
 const WORKFLOW_MODE_EXISTING = 'existing';
 const APP_NAV_ITEMS = [
-  { k: 'schedule', label: 'Vecka', icon: Calendar },
-  { k: 'staff', label: 'Personal', icon: Users },
-  { k: 'tasks', label: 'Uppdrag', icon: Briefcase },
-  { k: 'drift', label: 'Drift', icon: AlertCircle },
-  { k: 'rules', label: 'Bemanning', icon: Clock },
-  { k: 'settings', label: 'Inställningar', icon: Settings },
+  // Dagligt arbete
+  { k: 'schedule', label: 'Vecka',       icon: Calendar,    group: 'daily' },
+  { k: 'drift',    label: 'Drift',       icon: AlertCircle, group: 'daily' },
+  { k: 'tasks',    label: 'Uppdrag',     icon: Briefcase,   group: 'daily' },
+  // Resurser
+  { k: 'staff',    label: 'Personal',    icon: Users,       group: 'resources' },
+  { k: 'passbank', label: 'Passbank',    icon: Layers,      group: 'resources' },
+  { k: 'friday',   label: 'Fredagsrull', icon: Repeat,      group: 'resources' },
+  // Regler & struktur
+  { k: 'rules',    label: 'Bemanning',   icon: Clock,       group: 'rules' },
+  { k: 'settings', label: 'Inställningar', icon: Settings,  group: 'rules' },
+];
+const APP_NAV_GROUPS = [
+  { id: 'daily',     label: 'Arbetsdag' },
+  { id: 'resources', label: 'Resurser' },
+  { id: 'rules',     label: 'Regler & struktur' },
 ];
 
 function normalizeWorkflowMode(mode) {
@@ -332,11 +343,11 @@ function getWorkflowModeMeta(mode) {
     id: WORKFLOW_MODE_GENERATE,
     label: 'Jag vill ha hjälp att pussla schema',
     shortLabel: 'Pussla schema',
-    description: 'Bygg upp passbank, bemanning och regler och låt sedan appen räkna fram schemaförslag som du finjusterar vidare.',
+    description: 'Bygg upp avdelningar, passbank, fredagscykel och bemanning. Sedan räknar appen fram schemaförslag som du finjusterar vidare.',
     steps: [
-      'Ställ in avdelningar, passbank och regler.',
-      'Låt appen generera och justera sedan passen i Vecka.',
-      'Lägg därefter på Uppdrag och använd Drift vid frånvaro.',
+      'Ställ in avdelningar och passbank, definiera fredagscykeln.',
+      'Lägg in personal och bemanningskrav.',
+      'Låt appen generera schemaförslag och justera i Vecka. Lägg på Uppdrag och använd Drift vid frånvaro.',
     ],
   };
 }
@@ -345,21 +356,25 @@ function getWorkflowTour(mode) {
   const normalized = normalizeWorkflowMode(mode);
   if (normalized === WORKFLOW_MODE_EXISTING) {
     return [
-      { view: 'staff', title: 'Steg 1 av 6 · Personal', desc: 'Lägg in kollegorna som redan finns i ert schema. Börja med namn, avdelning, tjänstgöring och fredagsrutin.' },
-      { view: 'schedule', title: 'Steg 2 av 6 · Vecka', desc: 'Här lägger du in eller justerar befintliga arbetspass direkt. Klicka på en stapel eller rad för att skriva tider manuellt.' },
-      { view: 'tasks', title: 'Steg 3 av 6 · Uppdrag', desc: 'När grundpassen finns kan du lägga på lektioner, rastvärd, öppning, stängning, samverkan och andra uppdrag.' },
-      { view: 'drift', title: 'Steg 4 av 6 · Drift', desc: 'I Drift markerar du dagens frånvaro och ser direkt vad som faller bort, vad som måste täckas och var luckor uppstår.' },
-      { view: 'settings', title: 'Steg 5 av 6 · Inställningar', desc: 'Här hittar du bland annat fredagscykeln, passbanken och annan grundkonfiguration som påverkar hur appen tolkar schemat.' },
-      { view: 'rules', title: 'Steg 6 av 6 · Bemanning', desc: 'Om du vill använda bemanningskontroll eller jämföra mot täckningskrav lägger du in block här. Generatorn är valfri i detta arbetssätt.' },
+      { view: 'staff',    title: 'Steg 1 av 8 · Personal',    desc: 'Lägg in kollegorna som redan finns i ert schema. Namn, avdelning, tjänstgöring och fredagsrutin.' },
+      { view: 'schedule', title: 'Steg 2 av 8 · Vecka',       desc: 'Lägg in eller justera befintliga arbetspass direkt. Klicka på en stapel eller rad för att skriva tider manuellt.' },
+      { view: 'tasks',    title: 'Steg 3 av 8 · Uppdrag',     desc: 'När grundpassen finns kan du lägga på lektioner, rastvärd, öppning, stängning, samverkan och andra uppdrag.' },
+      { view: 'drift',    title: 'Steg 4 av 8 · Drift',       desc: 'Markera dagens frånvaro och se direkt vad som faller bort, vad som måste täckas och var luckor uppstår.' },
+      { view: 'passbank', title: 'Steg 5 av 8 · Passbank',    desc: 'Egen flik. Här ligger passen som generatorn (om du vill prova) och Drift väger in när någon faller bort.' },
+      { view: 'friday',   title: 'Steg 6 av 8 · Fredagsrull', desc: 'Egen flik. Bygg en central fredagsmall som personalen kan rotera i — eller behåll fasta fredagar per person.' },
+      { view: 'rules',    title: 'Steg 7 av 8 · Bemanning',   desc: 'Valfritt: lägg in täckningskrav per dag eller avdelning så att Drift kan flagga underbemanning.' },
+      { view: 'settings', title: 'Steg 8 av 8 · Inställningar', desc: 'Avdelningar, arbetsflöde, exempelscenarier och datahantering. Mycket av det som tidigare låg här har nu egna flikar.' },
     ];
   }
   return [
-    { view: 'settings', title: 'Steg 1 av 6 · Inställningar', desc: 'Börja med avdelningar, passbank och fredagscykel så att appen vet hur ert fritidshem är uppbyggt.' },
-    { view: 'staff', title: 'Steg 2 av 6 · Personal', desc: 'Lägg sedan till en kollega i taget med tjänstgöring, tillåtna pass, fredagsrutin och viktiga regler.' },
-    { view: 'rules', title: 'Steg 3 av 6 · Bemanning', desc: 'Här talar du om hur många som behöver vara på plats över dagen, gemensamt eller per avdelning.' },
-    { view: 'schedule', title: 'Steg 4 av 6 · Vecka', desc: 'När grunderna finns kan appen pussla fram förslag. Här ser du resultatet och kan finjustera tider manuellt.' },
-    { view: 'tasks', title: 'Steg 5 av 6 · Uppdrag', desc: 'När grundschemat sitter lägger du på dagens innehåll som lektioner, rastvärd, öppning, stängning och andra uppdrag.' },
-    { view: 'drift', title: 'Steg 6 av 6 · Drift', desc: 'I Drift ser du vad som faller bort vid frånvaro och vilka delar av dagen som behöver akut täckning.' },
+    { view: 'settings', title: 'Steg 1 av 8 · Inställningar', desc: 'Börja med avdelningar — namn, färg och struktur för hela fritidshemmet.' },
+    { view: 'passbank', title: 'Steg 2 av 8 · Passbank',     desc: 'Passbanken är passen som generatorn får använda på vardagar. Tid, typ och antal styr hur appen pusslar.' },
+    { view: 'friday',   title: 'Steg 3 av 8 · Fredagsrull',  desc: 'Bygg den centrala fredagscykeln. Personer kan sedan rotera i mallen eller välja fast fredag/passbank.' },
+    { view: 'staff',    title: 'Steg 4 av 8 · Personal',     desc: 'Lägg till en kollega i taget med tjänstgöring, tillåtna pass, fredagsrutin och viktiga regler.' },
+    { view: 'rules',    title: 'Steg 5 av 8 · Bemanning',    desc: 'Talar om hur många som behöver vara på plats över dagen, gemensamt eller per avdelning.' },
+    { view: 'schedule', title: 'Steg 6 av 8 · Vecka',        desc: 'När grunderna finns kan appen pussla fram förslag. Här ser du resultatet och kan finjustera tider manuellt.' },
+    { view: 'tasks',    title: 'Steg 7 av 8 · Uppdrag',      desc: 'När grundschemat sitter lägger du på dagens innehåll som lektioner, rastvärd, öppning, stängning och andra uppdrag.' },
+    { view: 'drift',    title: 'Steg 8 av 8 · Drift',        desc: 'Markera frånvaro och se vad som faller bort, vilka uppdrag som måste täckas och var luckor uppstår.' },
   ];
 }
 
@@ -373,7 +388,9 @@ function getTabHelpText(tabKey, workflowMode) {
     tasks: 'Här lägger du uppdrag ovanpå grundschemat, som lektioner, rastvärd, öppning och stängning.',
     drift: 'Här markerar du frånvaro och ser direkt vad som faller bort och behöver täckas.',
     rules: 'Här lägger du bemanningskrav över dagen, gemensamt eller per avdelning.',
-    settings: 'Här hittar du passbank, fredagscykel, avdelningar och annan grundkonfiguration.',
+    passbank: 'Passen som generatorn får använda på vardagar. Ändringar slår igenom i Vecka, Generator och Drift.',
+    friday: 'Fredagscykelns mall och varje persons rotation. Bygg en central mall och låt personerna välja startvecka.',
+    settings: 'Här hittar du avdelningar, arbetsflöde, import/export och exempelscenarier.',
   };
   return map[tabKey] || '';
 }
@@ -1338,11 +1355,17 @@ function buildCandidateBreakStatus(shift, tasks, intervalStart, intervalEnd, ove
   if (!shift) return { hasThirtyMinuteBreak: false, label: 'Ingen rastbedömning ännu' };
   const shiftStart = timeToMin(shift[0]);
   const shiftEnd = timeToMin(shift[1]);
+  const rawShiftMinutes = shiftEnd - shiftStart;
+  if (rawShiftMinutes <= MANDATORY_BREAK_AFTER_MINUTES) {
+    return { hasThirtyMinuteBreak: true, label: 'Ingen 30 min rast krävs på det här passet' };
+  }
+  const earliestBreakStart = shiftStart + MANDATORY_BREAK_AFTER_MINUTES;
   const overlappingIds = new Set((Array.isArray(overlapping) ? overlapping : []).map(task => String(task.id)));
   const remainingTasks = sortAssignments((Array.isArray(tasks) ? tasks : []).filter(task => !overlappingIds.has(String(task.id))));
   const explicitBreakWindows = remainingTasks
     .filter(task => assignmentCountsAsBreak(task) && (task.end - task.start) >= 30)
-    .map(task => ({ start: task.start, end: task.end, source: 'plannedBreak' }));
+    .map(task => ({ start: Math.max(task.start, earliestBreakStart), end: task.end, source: 'plannedBreak' }))
+    .filter(task => (task.end - task.start) >= 30);
   const busyIntervals = mergeIntervals([
     ...remainingTasks
       .filter(task => !assignmentCountsAsBreak(task))
@@ -1360,13 +1383,14 @@ function buildCandidateBreakStatus(shift, tasks, intervalStart, intervalEnd, ove
   if (cursor < shiftEnd) openWindows.push({ start: cursor, end: shiftEnd, source: 'gap' });
 
   const windows = [...explicitBreakWindows, ...openWindows]
+    .map(window => ({ ...window, start: Math.max(window.start, earliestBreakStart) }))
     .filter(window => (window.end - window.start) >= 30)
     .sort((a, b) => {
       if (a.source !== b.source) return a.source === 'plannedBreak' ? -1 : 1;
       return a.start - b.start;
     });
   if (windows.length === 0) {
-    return { hasThirtyMinuteBreak: false, label: 'Ingen tydlig 30 min rast kvar' };
+    return { hasThirtyMinuteBreak: false, label: 'Ingen tydlig 30 min rast kvar efter 5 timmars arbete' };
   }
   const best = windows[0];
   const suggestedEnd = Math.min(best.end, best.start + 30);
@@ -3504,31 +3528,64 @@ function FritidsSchemaApp() {
         }
       `}</style>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <header className="mb-8 flex items-end justify-between flex-wrap gap-4">
-          <div className="flex items-center gap-4">
-            <OwlMark size={64} />
-            <div>
-              <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Fritidshem · schemaverktyg</p>
-              <h1 className="display-font text-4xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>SchemaFIX</h1>
-              <div className="flex items-center gap-2 mt-1 flex-wrap">
-                <p className="text-stone-600 text-sm">Prototyp v46 · tydligare ägarskap och uppdragstider</p>
-                <p className="text-[11px] text-stone-400">© 2026 Andreas Jonsson · Egenutvecklad prototyp</p>
+      <div className="flex min-h-screen w-full">
+        {/* Sidebar navigation */}
+        <aside className="w-56 shrink-0 bg-[#FDFCFA] border-r border-stone-200 flex flex-col py-4 px-3 sticky top-0 h-screen overflow-y-auto">
+          <div className="flex items-center gap-3 px-2 mb-5">
+            <OwlMark size={36} />
+            <div className="min-w-0">
+              <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
+              <p className="text-[10px] text-stone-500 mt-0.5">Fritidshem · prototyp v51</p>
+            </div>
+          </div>
+          <nav className="flex-1 flex flex-col gap-4">
+            {APP_NAV_GROUPS.map(group => (
+              <div key={group.id}>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-stone-400 px-3 mb-1">{group.label}</div>
+                <div className="flex flex-col gap-0.5">
+                  {APP_NAV_ITEMS.filter(it => it.group === group.id).map(item => {
+                    const ItemIcon = item.icon;
+                    const isActive = view === item.k;
+                    return (
+                      <button key={item.k}
+                        onClick={() => setView(item.k)}
+                        title={getTabHelpText(item.k, workflowMode)}
+                        className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition ${isActive ? 'bg-[#D97757] text-white font-medium shadow-sm' : 'text-stone-700 hover:bg-stone-100'}`}>
+                        <ItemIcon size={16} />
+                        <span className="flex-1 min-w-0 truncate">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </nav>
+          <div className="border-t border-stone-200 pt-3 mt-3 px-2 space-y-2">
+            <button onClick={() => setShowWelcome(true)} className="flex items-center gap-2 text-xs text-stone-500 hover:text-stone-800 transition">
+              <HelpCircle size={14} />Hjälp & guidad tur
+            </button>
+            <p className="text-[10px] text-stone-400 leading-relaxed">© 2026 Andreas Jonsson<br />42 Improbable Owls · prototyp</p>
+          </div>
+        </aside>
+        {/* Main column */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <header className="bg-white border-b border-stone-200 px-6 py-3 flex items-center justify-between gap-3 flex-wrap sticky top-0 z-30">
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-widest text-stone-400">Fritidshem · schemaverktyg</p>
+              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                <h2 className="display-font text-2xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>{(APP_NAV_ITEMS.find(i => i.k === view) || {}).label || 'SchemaFIX'}</h2>
                 {dirty && (
-                  <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
-                    <Circle size={6} fill="currentColor" />
+                  <span className="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
+                    <Circle size={5} fill="currentColor" />
                     Osparade ändringar
                   </span>
                 )}
                 {!dirty && savedFileName && (
-                  <span className="text-xs text-stone-500">Sparat som {savedFileName}</span>
+                  <span className="text-[11px] text-stone-500">Sparat som {savedFileName}</span>
                 )}
               </div>
-              <p className="text-[10px] uppercase tracking-wider text-stone-400 mt-1">42 Improbable Owls / Andreas Jonsson</p>
             </div>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex gap-1">
+            <div className="flex items-center gap-2 flex-wrap shrink-0">
               <input type="file" accept="application/json,.json" id="loadFileInput" style={{ display: 'none' }}
                 onChange={(e) => {
                   const file = e.target.files?.[0];
@@ -3552,32 +3609,18 @@ function FritidsSchemaApp() {
                   Spara som...
                 </button>
               )}
+              <button onClick={handleGenerate} disabled={generating || staff.length === 0}
+                title={workflowMode === WORKFLOW_MODE_EXISTING ? 'Valfritt: låt appen pussla ett nytt schemaförslag om du vill jämföra med ditt befintliga schema.' : 'Låt appen pussla fram tre schemaförslag utifrån regler och bemanning.'}
+                className="px-4 py-2 rounded-full text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2 disabled:opacity-50">
+                <Wand2 size={14} />
+                {generating ? 'Räknar...' : workflowMode === WORKFLOW_MODE_EXISTING ? 'Pussla nytt' : 'Generera'}
+              </button>
             </div>
-            <button onClick={handleGenerate} disabled={generating || staff.length === 0}
-              title={workflowMode === WORKFLOW_MODE_EXISTING ? 'Valfritt: låt appen pussla ett nytt schemaförslag om du vill jämföra med ditt befintliga schema.' : 'Låt appen pussla fram tre schemaförslag utifrån regler och bemanning.'}
-              className="px-4 py-2.5 rounded-full text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2 disabled:opacity-50">
-              <Wand2 size={14} />
-              {generating ? 'Räknar...' : workflowMode === WORKFLOW_MODE_EXISTING ? 'Pussla nytt förslag' : 'Generera schemaförslag'}
-            </button>
-            <button onClick={() => setShowWelcome(true)} title="Hjälp och guidad tur"
-              className="p-2 rounded-full text-stone-500 hover:bg-stone-200/60 hover:text-stone-800 transition">
-              <HelpCircle size={18} />
-            </button>
-            <div className="flex gap-1 p-1 rounded-full bg-stone-200/60 flex-wrap">
-              {APP_NAV_ITEMS.map(item => (
-                <NavTabButton
-                  key={item.k}
-                  item={item}
-                  workflowMode={workflowMode}
-                  active={view === item.k}
-                  onClick={() => setView(item.k)}
-                />
-              ))}
-            </div>
-          </div>
-        </header>
+          </header>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+          <div className="flex-1 px-6 py-5 max-w-7xl w-full mx-auto">
+            {(view === 'schedule' || view === 'drift') && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <StatCard label="Personal" value={staff.length} sub="aktiva" />
           <StatCard label="Veckotimmar tot." value={minToHM(staff.reduce((a, s) => a + weeklyMinutes(s, fridayCycleWeeks, fridayTemplateRotation), 0))}
             tooltip="Summan av all schemalagd arbetstid på arbetsplatsen. På pass längre än 5 timmar dras 30 min rast av i timräkningen." />
@@ -3586,23 +3629,24 @@ function FritidsSchemaApp() {
           <StatCard label="Regelbrott" value={violations.length}
             highlight={violations.length > 0 ? 'warn' : 'ok'} sub={violations.length > 0 ? 'se Personal-fliken' : 'allt ok'} />
         </div>
+            )}
 
-        <WorkflowModePanel
+        {(view === 'schedule' || view === 'staff') && (<WorkflowModePanel
           workflowMode={workflowMode}
           staffCount={staff.length}
           onChangeMode={activateWorkflowMode}
           onOpenView={setView}
           onOpenFile={openFile}
-        />
+        />)}
 
-        <FridayCycleBanner
+        {(view === 'schedule' || view === 'drift' || view === 'staff') && (<FridayCycleBanner
           fridayCycleWeeks={fridayCycleWeeks}
           currentFridayWeek={currentFridayWeek}
-          onOpenSettings={() => setView('settings')}
+          onOpenSettings={() => setView('friday')}
           onOpenSchedule={() => { setView('schedule'); setActiveDay('fri'); }}
-        />
+        />)}
 
-        <FeasibilityPanel issues={feasibilityIssues} onGoToRules={() => setView('rules')} />
+        {(view === 'schedule' || view === 'drift') && (<FeasibilityPanel issues={feasibilityIssues} onGoToRules={() => setView('rules')} />)}
 
         {view === 'schedule' && (
           <ScheduleView dayData={dayData} activeDay={activeDay} setActiveDay={setActiveDay} onEdit={setEditingId}
@@ -3642,7 +3686,13 @@ function FritidsSchemaApp() {
           currentFridayWeek={currentFridayWeek}
         />}
         {view === 'rules' && <RulesView blocks={normalizedCoverageBlocks} setBlocks={setCoverageBlocks} departments={departments} staff={staff} passBank={passBank} fridayCycleWeeks={fridayCycleWeeks} feasibilityIssues={feasibilityIssues} />}
-        {view === 'settings' && <SettingsView departments={departments} setDepartments={setDepartments}
+        {view === 'passbank' && <PassbankView passBank={passBank} setPassBank={setPassBank}
+          staff={staff} setStaff={setStaff} departments={departments} />}
+        {view === 'friday' && <FridayRollView staff={staff} departments={departments}
+          fridayTemplateRotation={fridayTemplateRotation} setFridayTemplateRotation={setFridayTemplateRotation}
+          fridayCycleWeeks={fridayCycleWeeks} setFridayCycleWeeks={setFridayCycleWeeks}
+          currentFridayWeek={currentFridayWeek} />}
+        {view === 'settings' && <SettingsView mode="settings" departments={departments} setDepartments={setDepartments}
           staff={staff} setStaff={setStaff} coverageBlocks={normalizedCoverageBlocks} setCoverageBlocks={setCoverageBlocks}
           passBank={passBank} setPassBank={setPassBank}
           fridayTemplateRotation={fridayTemplateRotation} setFridayTemplateRotation={setFridayTemplateRotation}
@@ -3653,6 +3703,8 @@ function FritidsSchemaApp() {
           <span>Klicka på en person för att redigera detaljer. Tryck "Generera schemaförslag" när du vill att appen pusslar fram alternativ baserat på allas villkor.</span>
           <span className="text-stone-400 whitespace-nowrap">© 2026 Andreas Jonsson · Alla rättigheter förbehållna</span>
         </footer>
+          </div>
+        </div>
       </div>
 
       {editingId !== null && (
@@ -4025,7 +4077,8 @@ function WorkflowModePanel({ workflowMode, onChangeMode, onOpenView, onOpenFile,
               </>
             ) : (
               <>
-                <button type="button" onClick={() => onOpenView('settings')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Inställningar</button>
+                <button type="button" onClick={() => onOpenView('passbank')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Passbank</button>
+                <button type="button" onClick={() => onOpenView('friday')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Fredagsrull</button>
                 <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Personal</button>
                 <button type="button" onClick={() => onOpenView('rules')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Bemanning</button>
                 <button type="button" onClick={() => onOpenView('schedule')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Öppna Vecka</button>
@@ -4458,7 +4511,7 @@ function FridayCycleBanner({ fridayCycleWeeks, currentFridayWeek, onOpenSettings
             Aktiv fredag i vyn är vecka <span style={{ fontWeight: 600 }}>{currentFridayWeek}</span>.
           </p>
           <p className="text-xs text-stone-500 mt-1">
-            Ändra antal veckor under <strong>Inställningar</strong> i delen <strong>Fredagscykel och fredagsrull</strong>.
+            Justera antalet veckor och rotationsmallen i fliken <strong>Fredagsrull</strong>.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -4467,7 +4520,7 @@ function FridayCycleBanner({ fridayCycleWeeks, currentFridayWeek, onOpenSettings
             onClick={onOpenSettings}
             className="px-3 py-2 rounded-lg text-sm bg-white text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100 transition"
           >
-            Öppna inställningen
+            Öppna Fredagsrull
           </button>
           <button
             type="button"
@@ -5506,9 +5559,6 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                           const meta = getAssignmentTypeMeta(task.type);
                           const left = pctFromMin(task.start);
                           const width = Math.max(2.4, pctFromMin(task.end) - pctFromMin(task.start));
-                          const timeLabel = `${minToTime(task.start)}–${minToTime(task.end)}`;
-                          const showTimeOnly = width < 12;
-                          const showLabel = width >= 20;
                           return (
                             <div
                               key={task.id}
@@ -5516,10 +5566,7 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                               style={{ left: `${left}%`, width: `${width}%`, backgroundColor: meta.color, color: '#fff' }}
                               title={`${task.label} · ${minToTime(task.start)}–${minToTime(task.end)}${task.target ? ` · ${task.target}` : ''}`}
                             >
-                              <span className="text-[10px] truncate whitespace-nowrap flex items-center gap-1">
-                                <span className="tabular-nums flex-shrink-0">{timeLabel}</span>
-                                {!showTimeOnly && showLabel && <span className="truncate">{task.label}</span>}
-                              </span>
+                              <span className="text-[10px] truncate whitespace-nowrap">{task.label}</span>
                             </div>
                           );
                         })}
@@ -5593,6 +5640,18 @@ function DriftView({
   currentFridayWeek,
 }) {
   const [staffQuery, setStaffQuery] = useState('');
+  const [nowMin, setNowMin] = useState(() => {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  });
+  useEffect(() => {
+    const tick = () => {
+      const d = new Date();
+      setNowMin(d.getHours() * 60 + d.getMinutes());
+    };
+    const t = setInterval(tick, 60000);
+    return () => clearInterval(t);
+  }, []);
   const dayKey = ALL_DAY_KEYS.includes(driftState?.dayKey) ? driftState.dayKey : 'mon';
   const fridayWeek = dayKey === 'fri' ? currentFridayWeek : 1;
   const fridayOptions = { fridayWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation };
@@ -5716,406 +5775,348 @@ function DriftView({
     );
   }
 
+  // ---- helpers for new Drift layout ----
+  const driftHours = [6,7,8,9,10,11,12,13,14,15,16,17,18];
+  const driftTimeStart = 360, driftTimeEnd = 1080;
+  const driftPct = (m) => Math.max(0, Math.min(100, ((m - driftTimeStart) / (driftTimeEnd - driftTimeStart)) * 100));
+  const presentNow = onShiftRows.filter(row => !row.isAbsent && row.shift && timeToMin(row.shift[0]) <= nowMin && timeToMin(row.shift[1]) >= nowMin).length;
+  const dayLabel = getDayMeta(dayKey).label;
+
   return (
-    <div className="space-y-4">
-      <TabIntro>
-        Drift läser det färdiga grundschemat och uppdragen ovanpå det. Här markerar du dagens frånvaro och får en snabb bild av vad som faller bort, vilka uppdrag som måste täckas och var bemanningen börjar spricka.
-      </TabIntro>
-
-      <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h2 className="display-font text-xl text-stone-800">Dagens driftläge</h2>
-            <p className="text-sm text-stone-500 mt-0.5">Det här läget ändrar inte grundschemat. Du markerar bara dagens avvikelser och får stöd för vad som behöver täckas.</p>
-            {dayKey === 'fri' && (
-              <p className="text-xs text-stone-400 mt-1">Visar fredag vecka {currentFridayWeek} från fredagsrullen.</p>
-            )}
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {DAY_META.map(day => (
-              <button
-                key={day.key}
-                type="button"
-                onClick={() => setDayKey(day.key)}
-                className={`px-3 py-1.5 rounded-full text-sm transition ${dayKey === day.key ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'}`}
-              >
-                {day.label}
+    <div className="space-y-3">
+      {/* Day picker + KPI strip */}
+      <div className="grid grid-cols-1 xl:grid-cols-[auto,1fr] gap-3 items-stretch">
+        <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-2 flex gap-1.5 self-start">
+          {DAY_META.map((day, idx) => {
+            const active = day.key === dayKey;
+            return (
+              <button key={day.key} type="button" onClick={() => setDayKey(day.key)}
+                className={`px-3.5 py-2 rounded-xl flex flex-col items-center gap-0 min-w-[48px] transition ${active ? 'bg-stone-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}>
+                <span className="text-[10px] uppercase opacity-70 tracking-wider font-medium">{day.short}</span>
+                <span className="display-font text-base" style={{ fontWeight: 500, lineHeight: 1 }}>{12 + idx}</span>
               </button>
-            ))}
-          </div>
+            );
+          })}
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4">
-          <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
-            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">På pass idag</p>
-            <p className="text-2xl text-stone-800 display-font">{onShiftRows.length}</p>
-            <p className="text-xs text-stone-500">personer har arbetspass {getDayMeta(dayKey).label.toLowerCase()}</p>
-          </div>
-          <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
-            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Frånvarande</p>
-            <p className={`text-2xl display-font ${(absentRows.length + staleAbsentRows.length) > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>{absentRows.length + staleAbsentRows.length}</p>
-            <p className="text-xs text-stone-500">markeras bara här i Drift, inte i grundschemat</p>
-          </div>
-          <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
-            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Akut just nu</p>
-            <p className={`text-2xl display-font ${urgentCount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>{urgentCount}</p>
-            <p className="text-xs text-stone-500">kritiska uppdrag + bemanningsluckor att titta på direkt</p>
-          </div>
-          <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
-            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Påverkade uppdrag</p>
-            <p className={`text-2xl display-font ${lostTasks > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>{lostTasks}</p>
-            <p className="text-xs text-stone-500">alla dagens uppdrag som ligger på personer du markerat som frånvarande</p>
-          </div>
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+          <DriftKpi label="På pass nu" value={presentNow} sub={`av ${onShiftRows.length} schemalagda ${dayLabel.toLowerCase()}`} />
+          <DriftKpi label="Frånvarande" value={absentRows.length + staleAbsentRows.length} sub="markerade här i Drift" tone={(absentRows.length + staleAbsentRows.length) > 0 ? 'amber' : 'emerald'} />
+          <DriftKpi label="Akut att täcka" value={lostCoverTasks.length + gapIssues.length} sub="kritiska uppdrag + bemanningsluckor" tone={(lostCoverTasks.length + gapIssues.length) > 0 ? 'rose' : 'emerald'} highlight={(lostCoverTasks.length + gapIssues.length) > 0} />
+          <DriftKpi label="Påverkade uppdrag" value={lostTasks} sub="ligger på frånvarande" tone={lostTasks > 0 ? 'amber' : 'emerald'} />
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[360px,1fr] gap-4 items-start">
-        <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4 xl:sticky xl:top-4">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
+      {/* Timeline strip */}
+      <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4">
+        <div className="flex items-center gap-3 mb-3 flex-wrap">
+          <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium" style={{ background: '#FBEFE7', color: '#D97757', boxShadow: 'inset 0 0 0 1px #D9775744' }}>
+            <span className="w-1.5 h-1.5 rounded-full bg-[#D97757]" style={{ animation: 'driftPulse 2s infinite' }} />
+            Nu · {minToTime(nowMin)}
+          </span>
+          <span className="text-xs text-stone-500">
+            Dagens pass över tid. Frånvarande markeras med streck. Kritiska uppdrag är svarta segment.
+          </span>
+          {dayKey === 'fri' && (
+            <span className="text-xs text-stone-400">Visar fredag v.{currentFridayWeek}</span>
+          )}
+        </div>
+        {/* hour ruler */}
+        <div className="flex pl-[140px] text-[10px] text-stone-400 mb-1 select-none">
+          {driftHours.map(h => (
+            <div key={h} className="flex-1 tabular-nums">{h.toString().padStart(2,'0')}:00</div>
+          ))}
+        </div>
+        {/* tracks */}
+        <div className="relative">
+          {/* hour gridlines */}
+          {driftHours.slice(0, -1).map((h, i) => (
+            <div key={h} className="absolute top-0 bottom-0 bg-stone-100" style={{ left: `calc(140px + (100% - 140px) * ${driftPct(h*60)} / 100)`, width: 1, pointerEvents: 'none' }} />
+          ))}
+          {/* NOW vertical line */}
+          {nowMin >= driftTimeStart && nowMin <= driftTimeEnd && (
+            <div className="absolute top-0 bottom-0 z-10 pointer-events-none" style={{ left: `calc(140px + (100% - 140px) * ${driftPct(nowMin)} / 100)`, width: 2, background: '#D97757' }} />
+          )}
+          {onShiftRows.map(row => {
+            const shiftStart = timeToMin(row.shift[0]);
+            const shiftEnd = timeToMin(row.shift[1]);
+            const dept = row.dept;
+            const mustCoverTask = row.tasks.find(t => t.mustCover);
+            const soft = softColor(dept.color);
+            return (
+              <div key={row.person.id} className="flex items-center" style={{ height: 24, marginBottom: 2 }}>
+                <div className="w-[135px] pr-2 flex items-center gap-1.5 text-xs truncate" style={{ color: row.isAbsent ? '#A8A29E' : '#44403C', textDecoration: row.isAbsent ? 'line-through' : 'none' }}>
+                  <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: dept.color }} />
+                  <span className="truncate">{row.person.name.split(' ')[0]} {row.person.name.split(' ').slice(1).map(p => p[0]).join('.')}</span>
+                </div>
+                <div className="flex-1 relative h-full">
+                  <div className="absolute rounded-md" title={`${minToTime(shiftStart)}–${minToTime(shiftEnd)} · ${dept.name}`}
+                    style={{
+                      top: 3, bottom: 3,
+                      left: `${driftPct(shiftStart)}%`,
+                      width: `${driftPct(shiftEnd) - driftPct(shiftStart)}%`,
+                      background: row.isAbsent
+                        ? `repeating-linear-gradient(45deg, ${soft} 0 6px, #F5F5F4 6px 12px)`
+                        : soft,
+                      boxShadow: `inset 0 0 0 1px ${dept.color}66`,
+                      opacity: row.isAbsent ? 0.7 : 1,
+                    }} />
+                  {mustCoverTask && (
+                    <div className="absolute rounded-sm" title={`${mustCoverTask.label || inferAssignmentLabel(mustCoverTask.type)} · ${minToTime(mustCoverTask.start)}–${minToTime(mustCoverTask.end)}`}
+                      style={{
+                        top: 6, bottom: 6,
+                        left: `${driftPct(mustCoverTask.start)}%`,
+                        width: `${driftPct(mustCoverTask.end) - driftPct(mustCoverTask.start)}%`,
+                        background: row.isAbsent ? '#BE123C' : '#1C1917',
+                        opacity: row.isAbsent ? 0.9 : 0.85,
+                      }} />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {onShiftRows.length === 0 && (
+            <div className="text-sm text-stone-400 py-8 text-center italic">Inga schemalagda pass den här dagen.</div>
+          )}
+        </div>
+      </div>
+
+      {/* Body split: needs solving + staff toggle */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr,360px] gap-3">
+        {/* Behöver lösas */}
+        <div className="bg-white rounded-2xl ring-1 ring-stone-200 flex flex-col">
+          <div className="px-4 py-3 border-b border-stone-200 flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <h2 className="display-font text-xl text-stone-800">All personal idag</h2>
-              <p className="text-sm text-stone-500 mt-0.5">Här väljer du frånvaro. Alla syns, även de som inte har arbetspass den här dagen.</p>
+              <h2 className="display-font text-lg text-stone-800">Behöver lösas</h2>
+              <p className="text-xs text-stone-500 mt-0.5">{lostCoverTasks.length} kritiska · {gapIssues.length} bemanningsluckor</p>
+            </div>
+            <div className="flex gap-1.5">
+              {lostCoverTasks.length > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: '#FFE4E6', color: '#BE123C', boxShadow: 'inset 0 0 0 1px #BE123C44' }}>{lostCoverTasks.length} akut</span>
+              )}
+              {gapIssues.length > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: '#FEF3C7', color: '#B45309', boxShadow: 'inset 0 0 0 1px #FDE68A' }}>{gapIssues.length} luckor</span>
+              )}
+            </div>
+          </div>
+          <div className="p-2 overflow-y-auto" style={{ maxHeight: 540 }}>
+            {lostCoverTasks.length === 0 && gapIssues.length === 0 && (
+              <div className="px-4 py-10 text-center">
+                <CheckCircle2 size={28} className="mx-auto text-emerald-600 mb-2" />
+                <div className="display-font text-base text-stone-700">Inget akut just nu</div>
+                <p className="text-xs text-stone-500 mt-1">Inga kritiska uppdrag faller bort och bemanningskraven är täckta.</p>
+              </div>
+            )}
+            {lostCoverTasks.map(({ person, dept, task, candidates }) => {
+              const meta = getAssignmentTypeMeta(task.type);
+              // Smart-sort: samma avdelning först, sedan score, sedan free vs busy
+              const allCands = [...(candidates.free || []), ...(candidates.busy || [])];
+              const sortedCands = allCands.slice().sort((a, b) => {
+                if (a.sameDept !== b.sameDept) return a.sameDept ? -1 : 1;
+                const aFree = a.overlapping.length === 0;
+                const bFree = b.overlapping.length === 0;
+                if (aFree !== bFree) return aFree ? -1 : 1;
+                if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
+                return a.person.name.localeCompare(b.person.name, 'sv');
+              });
+              const candList = sortedCands.slice(0, 5);
+              return (
+                <div key={`lost-${task.id}`} className="p-3 m-1 rounded-xl" style={{ background: '#FFFBF7', boxShadow: 'inset 0 0 0 1px #FDE68A' }}>
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-white text-center shrink-0" style={{ padding: '3px 7px', boxShadow: `inset 0 0 0 1px ${meta.color}55`, minWidth: 42 }}>
+                      <div className="text-[9px] font-bold uppercase tracking-wider" style={{ color: meta.color }}>{minToTime(task.start).slice(0,2)}</div>
+                      <div className="display-font text-sm leading-none" style={{ color: '#1C1917' }}>{minToTime(task.start).slice(3)}</div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm" style={{ color: '#1C1917', fontWeight: 500 }}>{task.label || meta.label}</span>
+                        <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0 text-[10px]" style={{ background: '#fff', color: meta.color, boxShadow: `inset 0 0 0 1px ${meta.color}44` }}>{meta.short || meta.label}</span>
+                        <span className="text-[11px] text-stone-500">· {minToTime(task.start)}–{minToTime(task.end)}</span>
+                      </div>
+                      <div className="text-[11px] text-stone-500 flex items-center gap-1 mt-0.5">
+                        <span style={{ textDecoration: 'line-through' }}>{person.name}</span>
+                        <span className="text-stone-300">·</span>
+                        <span className="inline-flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: dept.color }} />{dept.name}</span>
+                        <span className="text-stone-300">·</span>
+                        <span style={{ color: '#BE123C', fontWeight: 500 }}>Måste täckas</span>
+                      </div>
+                    </div>
+                  </div>
+                  {candList.length === 0 ? (
+                    <div className="text-[11px] text-stone-400 italic ml-12 mt-2">Inga lämpliga personer hittades just nu.</div>
+                  ) : (
+                    <div className="mt-2 ml-12 flex flex-col gap-1">
+                      {candList.map((cand) => {
+                        const cDept = getDept(cand.person.deptId, departments);
+                        const isFree = cand.overlapping.length === 0;
+                        const breakOk = cand.breakStatus?.hasThirtyMinuteBreak !== false;
+                        const releasable = (cand.releasableOverlapping || []).length;
+                        const blocking = (cand.blockingOverlapping || []).length;
+                        // Fit label: prioritize sameDept + free, then free, then conflict
+                        const fit = (cand.sameDept && isFree) ? { label: 'Bra match', color: '#047857', ring: '#04785766' }
+                                  : isFree ? { label: 'Ledig', color: '#475569', ring: '#E7E5E4' }
+                                  : (releasable > 0 && blocking === 0) ? { label: 'Kan släppa annat', color: '#B45309', ring: '#FDE68A' }
+                                  : { label: 'Konflikt', color: '#A8A29E', ring: '#E7E5E4' };
+                        // Build reason line
+                        const reasonParts = [];
+                        if (cand.preferredCoverMatch) reasonParts.push('Förstahandsersättare');
+                        if (isFree) {
+                          reasonParts.push('På pass · ledig på passet');
+                        } else if (releasable > 0 && blocking === 0) {
+                          reasonParts.push(`Släpper ${releasable} uppdrag (resurs/planering)`);
+                        } else {
+                          reasonParts.push(`Krockar med ${cand.overlapping.length} uppdrag`);
+                        }
+                        const reason = reasonParts.join(' · ');
+                        return (
+                          <div key={`cand-${task.id}-${cand.person.id}`} className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white" style={{ boxShadow: `inset 0 0 0 1px ${fit.ring}` }}>
+                            <span className="inline-flex items-center justify-center text-[10px] font-semibold shrink-0" style={{ width: 22, height: 22, borderRadius: '50%', background: softColor(cDept.color), color: cDept.color, boxShadow: `inset 0 0 0 1px ${cDept.color}33` }}>
+                              {cand.person.name.split(' ').map(n => n[0]).slice(0,2).join('').toUpperCase()}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs flex items-center gap-1.5 flex-wrap" style={{ color: '#1C1917' }}>
+                                <span style={{ fontWeight: 500 }}>{cand.person.name}</span>
+                                <span className="text-stone-300">·</span>
+                                <span className="inline-flex items-center gap-1 text-stone-500"><span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: cDept.color }} />{cDept.name}</span>
+                                {cand.sameDept && (
+                                  <span className="inline-flex items-center rounded-full px-1.5 py-0 text-[9.5px] font-semibold" style={{ background: softColor(dept.color), color: dept.color, boxShadow: `inset 0 0 0 1px ${dept.color}44` }}>
+                                    samma avd
+                                  </span>
+                                )}
+                                {!breakOk && (
+                                  <span className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0 text-[9.5px] font-semibold" style={{ background: '#FEF3C7', color: '#B45309', boxShadow: 'inset 0 0 0 1px #FDE68A' }} title={cand.breakStatus?.label || 'Rastregel-varning'}>
+                                    <AlertCircle size={9} />rast
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10.5px] text-stone-500 truncate">{reason}</div>
+                            </div>
+                            <span className="text-[10.5px] font-semibold whitespace-nowrap" style={{ color: fit.color }}>{fit.label}</span>
+                          </div>
+                        );
+                      })}
+                      {sortedCands.length > 5 && (
+                        <div className="text-[10.5px] text-stone-400 italic px-2 mt-0.5">+ {sortedCands.length - 5} fler kandidater (öppna personen för fler alternativ)</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {gapIssues.length > 0 && (
+              <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider font-semibold text-stone-400">Bemanningsluckor</div>
+            )}
+            {gapIssues.map(issue => (
+              <div key={`gap-${issue.scopeKey}-${issue.start}`} className="p-3 m-1 rounded-xl" style={{ background: '#FFF8F8', boxShadow: 'inset 0 0 0 1px #FECDD3' }}>
+                <div className="flex items-center gap-2 text-sm">
+                  <AlertCircle size={14} style={{ color: '#BE123C' }} />
+                  <span style={{ fontWeight: 500, color: '#1C1917' }}>{issue.scopeLabel || 'Bemanning'}</span>
+                  <span className="text-xs text-stone-500 tabular-nums">{minToTime(issue.start)}–{minToTime(issue.end)}</span>
+                </div>
+                <div className="text-[11px] text-stone-500 mt-0.5">Har {issue.actual}, behöver minst {issue.target}.</div>
+              </div>
+            ))}
+            {(absentRows.flatMap(row => row.tasks.filter(t => !t.mustCover))).length > 0 && (
+              <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider font-semibold text-stone-400">Faller bort, behöver inte täckas</div>
+            )}
+            {absentRows.flatMap(row => row.tasks.filter(t => !t.mustCover).map(task => ({ row, task }))).map(({ row, task }, idx) => {
+              const meta = getAssignmentTypeMeta(task.type);
+              return (
+                <div key={`drop-${task.id}-${idx}`} className="p-2.5 m-1 rounded-xl flex items-center gap-2" style={{ boxShadow: 'inset 0 0 0 1px #F5F5F4' }}>
+                  <span className="inline-block w-1 h-6 rounded shrink-0" style={{ background: meta.color }} />
+                  <div className="flex-1 min-w-0 text-xs">
+                    <div style={{ color: '#44403C' }}>
+                      <span style={{ fontWeight: 500 }}>{task.label || meta.label}</span>
+                      <span className="text-stone-300"> · </span>
+                      <span className="tabular-nums text-stone-500">{minToTime(task.start)}–{minToTime(task.end)}</span>
+                    </div>
+                    <div className="text-[10.5px] text-stone-400 mt-0.5">
+                      <span style={{ textDecoration: 'line-through' }}>{row.person.name}</span> · ingen ersättare behövs
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Personal toggle list */}
+        <div className="bg-white rounded-2xl ring-1 ring-stone-200 flex flex-col">
+          <div className="px-4 py-3 border-b border-stone-200">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="display-font text-lg text-stone-800">Personal idag</h2>
+              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] bg-stone-100 text-stone-500">{onShiftRows.length} på pass</span>
+            </div>
+            <p className="text-xs text-stone-500 mt-0.5">Klicka för att markera frånvaro</p>
+            <div className="relative mt-2">
+              <input value={staffQuery} onChange={e => setStaffQuery(e.target.value)} placeholder="Sök personal…"
+                className="w-full pl-7 pr-2 py-1.5 rounded-md text-sm bg-stone-50 ring-1 ring-stone-200 outline-none focus:bg-white focus:ring-stone-400" />
+              <span className="absolute left-2 top-2 text-stone-400" style={{ fontSize: 0 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+              </span>
             </div>
             {(absentRows.length + staleAbsentRows.length) > 0 && (
-              <button
-                type="button"
-                onClick={clearAbsences}
-                className="px-3 py-2 rounded-lg text-sm bg-stone-100 text-stone-700 hover:bg-stone-200 transition"
-              >
-                Rensa frånvaro
+              <button type="button" onClick={clearAbsences} className="mt-2 text-[11px] text-stone-500 hover:text-stone-800 transition">
+                Rensa all frånvaro
               </button>
             )}
           </div>
-
-          <div className="mt-4 flex items-center gap-2">
-            <input
-              value={staffQuery}
-              onChange={(e) => setStaffQuery(e.target.value)}
-              placeholder="Sök namn, roll eller avdelning"
-              className="w-full px-3 py-2 rounded-xl bg-stone-50 ring-1 ring-stone-200 text-sm text-stone-700 outline-none focus:ring-stone-300"
-            />
-          </div>
-
-          <div className="flex flex-wrap gap-2 mt-3">
-            <span className="px-2 py-1 rounded-full text-xs bg-stone-100 text-stone-700">{rows.length} personer totalt</span>
-            <span className="px-2 py-1 rounded-full text-xs bg-stone-100 text-stone-700">{onShiftRows.length} på pass</span>
-            <span className="px-2 py-1 rounded-full text-xs bg-amber-100 text-amber-800">{absentRows.length + staleAbsentRows.length} frånvarande</span>
-          </div>
-
-          {staleAbsentRows.length > 0 && (
-            <div className="mt-4 rounded-xl bg-amber-50 ring-1 ring-amber-200 p-3">
-              <p className="text-xs uppercase tracking-wider text-amber-700 mb-1">Att kolla</p>
-              <p className="text-sm text-stone-700">
-                {staleAbsentRows.length} markerad{staleAbsentRows.length === 1 ? '' : 'e'} frånvaro{staleAbsentRows.length === 1 ? '' : 'r'} ligger på personer utan pass den här dagen. De ignoreras i driftanalysen tills du rensar frånvaron.
-              </p>
-            </div>
-          )}
-
-          <div className="space-y-4 mt-4 max-h-[72vh] overflow-y-auto pr-1">
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-2">I tjänst idag</p>
-              <div className="space-y-2">
-                {visibleOnShiftRows.length === 0 ? (
-                  <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4 text-sm text-stone-500">
-                    Ingen träff i personalistan.
-                  </div>
-                ) : visibleOnShiftRows.map(row => (
-                  <button
-                    key={`${dayKey}-${row.person.id}`}
-                    type="button"
-                    onClick={() => toggleAbsent(row.person.id)}
-                    className={`w-full text-left rounded-2xl ring-1 p-3 transition ${row.isAbsent ? 'bg-amber-50 ring-amber-300' : 'bg-stone-50 ring-stone-200 hover:bg-stone-100'}`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm text-stone-800 truncate" style={{ fontWeight: 500 }}>{row.person.name}</p>
-                        <div className="flex items-center gap-1.5 mt-1 text-xs text-stone-500">
-                          <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: row.dept.color }} />
-                          <span className="truncate">{row.dept.name}</span>
-                          {row.person.role && <span className="truncate">· {row.person.role}</span>}
-                        </div>
-                      </div>
-                      <span className={`px-2 py-1 rounded-full text-[10px] ${row.isAbsent ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
-                        {row.isAbsent ? 'Frånvarande' : 'På plats'}
-                      </span>
+          <div className="p-1.5 overflow-y-auto" style={{ maxHeight: 540 }}>
+            {filteredRows.map(row => {
+              const onShiftNow = row.shift && timeToMin(row.shift[0]) <= nowMin && timeToMin(row.shift[1]) >= nowMin;
+              const personTaskCount = row.tasks.length;
+              return (
+                <button key={row.person.id} type="button" onClick={() => toggleAbsent(row.person.id)}
+                  className={`w-full flex items-center gap-2 px-2 py-1.5 my-0.5 rounded-lg text-left transition ${row.isAbsent ? 'bg-amber-50 ring-1 ring-amber-200' : 'hover:bg-stone-50'}`}>
+                  <span className="inline-flex items-center justify-center text-[10px] font-semibold shrink-0" style={{ width: 28, height: 28, borderRadius: '50%', background: softColor(row.dept.color), color: row.dept.color, boxShadow: `inset 0 0 0 1px ${row.dept.color}33` }}>
+                    {row.person.name.split(' ').map(n => n[0]).slice(0,2).join('').toUpperCase()}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] flex items-center gap-1.5" style={{ color: row.isAbsent ? '#B45309' : '#1C1917', fontWeight: 500, textDecoration: row.isAbsent ? 'line-through' : 'none' }}>
+                      <span className="truncate">{row.person.name}</span>
+                      {onShiftNow && !row.isAbsent && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" title="På pass just nu" />}
                     </div>
-                    <div className="mt-3 flex items-center justify-between text-xs text-stone-700">
-                      <span>{row.shift[0]}–{row.shift[1]}</span>
-                      <span>{row.tasks.length} uppdrag</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {row.coverTaskCount > 0 && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-50 text-amber-800 ring-1 ring-amber-200">
-                          {row.coverTaskCount} måste täckas
-                        </span>
-                      )}
-                      {row.boundaryTaskCount > 0 && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] bg-sky-50 text-sky-800 ring-1 ring-sky-200">
-                          {row.boundaryTaskCount} öppning/stängning
-                        </span>
-                      )}
-                      {row.tasks.length === 0 && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] bg-stone-100 text-stone-600 ring-1 ring-stone-200">
-                          Inga uppdrag ännu
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-2">Ej i tjänst idag</p>
-              <div className="space-y-2">
-                {visibleOffShiftRows.length === 0 ? (
-                  <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4 text-sm text-stone-500">
-                    Alla synliga personer har arbetspass den här dagen.
-                  </div>
-                ) : visibleOffShiftRows.map(row => (
-                  <div key={`off-${dayKey}-${row.person.id}`} className="rounded-2xl ring-1 p-3 bg-stone-50 ring-stone-200 opacity-80">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm text-stone-700 truncate" style={{ fontWeight: 500 }}>{row.person.name}</p>
-                        <div className="flex items-center gap-1.5 mt-1 text-xs text-stone-500">
-                          <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: row.dept.color }} />
-                          <span className="truncate">{row.dept.name}</span>
-                          {row.person.role && <span className="truncate">· {row.person.role}</span>}
-                        </div>
-                      </div>
-                      <span className="px-2 py-1 rounded-full text-[10px] bg-stone-100 text-stone-600">
-                        Inget pass
-                      </span>
+                    <div className="text-[11px] truncate" style={{ color: row.isAbsent ? '#B45309' : '#78716C' }}>
+                      <span className="inline-flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: row.dept.color }} />{row.dept.name}</span>
+                      <span className="text-stone-300"> · </span>
+                      {row.shift ? `${row.shift[0]}–${row.shift[1]}` : <span className="italic">ledig idag</span>}
+                      {personTaskCount > 0 && <><span className="text-stone-300"> · </span>{personTaskCount} uppdrag</>}
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4">
-            <h2 className="display-font text-xl text-stone-800">Akut just nu</h2>
-            <p className="text-sm text-stone-500 mt-0.5">Det här är det viktigaste att titta på först när någon är sjuk eller borta.</p>
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
-              <div className="rounded-2xl bg-amber-50 ring-1 ring-amber-200 p-4">
-                <p className="text-xs uppercase tracking-wider text-amber-700 mb-2">Måste täckas</p>
-                <div className="space-y-2">
-                  {lostCoverTasks.length === 0 ? (
-                    <p className="text-sm text-stone-600">Inga uppdrag med täckningskrav har fallit bort ännu.</p>
-                  ) : lostCoverTasks.map(entry => (
-                    <div key={`critical-${entry.person.id}-${entry.task.id}`} className="rounded-xl bg-white/80 px-3 py-2">
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>{entry.task.label}</p>
-                        {assignmentIsBoundaryType(entry.task.type) && (
-                          <span className={`px-2 py-1 rounded-full text-[10px] ring-1 ${entry.task.type === 'opening' ? 'bg-sky-50 text-sky-800 ring-sky-200' : 'bg-amber-50 text-amber-900 ring-amber-200'}`}>
-                            {entry.task.type === 'opening' ? 'Öppning' : 'Stängning'}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-stone-500 mt-1">
-                        {entry.person.name} · {entry.dept.name} · {minToTime(entry.task.start)}–{minToTime(entry.task.end)}
-                      </p>
-                      {entry.candidates.best ? (
-                        <div className="mt-2">
-                          <p className="text-xs text-emerald-800">
-                            Bästa träff: {entry.candidates.best.person.name}
-                            {entry.candidates.best.overlapping.length === 0 ? ' · fri nu' : ' · kräver omflyttning'}
-                          </p>
-                          {entry.candidates.best.reasons.length > 0 && (
-                            <p className="text-xs text-stone-600 mt-1">{entry.candidates.best.reasons.join(' · ')}</p>
-                          )}
-                          {entry.candidates.best.breakStatus?.label && (
-                            <p className={`text-xs mt-1 ${entry.candidates.best.breakStatus.hasThirtyMinuteBreak ? 'text-stone-500' : 'text-amber-700'}`}>
-                              {entry.candidates.best.breakStatus.label}
-                            </p>
-                          )}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-amber-800 mt-2">Ingen tydlig kandidat hittad ännu.</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-2xl bg-stone-50 ring-1 ring-stone-200 p-4">
-                <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Bemanningsluckor</p>
-                <div className="space-y-2">
-                  {gapIssues.length === 0 ? (
-                    <p className="text-sm text-stone-600">Ingen tydlig bemanningslucka hittades i blocken just nu.</p>
-                  ) : gapIssues.map((issue, idx) => (
-                    <div key={`urgent-gap-${issue.scopeKey}-${issue.start}-${idx}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-stone-200">
-                      <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>{issue.scopeLabel}</p>
-                      <p className="text-xs text-stone-500 mt-1">{minToTime(issue.start)}–{minToTime(issue.end)} · saknar {issue.delta} person{issue.delta > 1 ? 'er' : ''}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4">
-              <h2 className="display-font text-xl text-stone-800">Förslag på ersättare</h2>
-              <p className="text-sm text-stone-500 mt-0.5">Drift väger nu in fria luckor, förstahandsersättare, resursuppdrag som kan släppas och om en möjlig 30-minutersrast fortfarande finns kvar.</p>
-              <div className="space-y-3 mt-4">
-                {lostCoverTasks.length === 0 ? (
-                  <div className="rounded-2xl bg-emerald-50 ring-1 ring-emerald-200 p-5 text-sm text-emerald-800">
-                    Ingen ersättningsjakt behövs just nu.
-                  </div>
-                ) : lostCoverTasks.map(entry => (
-                  <div key={`cover-${entry.person.id}-${entry.task.id}`} className="rounded-2xl bg-stone-50 ring-1 ring-stone-200 p-4">
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div>
-                        <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>{entry.task.label}</p>
-                        <p className="text-xs text-stone-500 mt-1">
-                          {entry.person.name} · {entry.dept.name} · {minToTime(entry.task.start)}–{minToTime(entry.task.end)}
-                          {entry.task.target ? ` · ${entry.task.target}` : ''}
-                        </p>
-                      </div>
-                      <span className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800">Behöver täckas</span>
-                    </div>
-                    {entry.candidates.best && (
-                      <div className="mt-3 rounded-xl bg-white px-3 py-3 ring-1 ring-stone-200">
-                        <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">Smartast först</p>
-                        <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>
-                          {entry.candidates.best.person.name} · {entry.candidates.best.shift[0]}–{entry.candidates.best.shift[1]}
-                        </p>
-                        {entry.candidates.best.reasons.length > 0 && (
-                          <p className="text-xs text-stone-600 mt-1">{entry.candidates.best.reasons.join(' · ')}</p>
-                        )}
-                        {entry.candidates.best.breakStatus?.label && (
-                          <p className={`text-xs mt-1 ${entry.candidates.best.breakStatus.hasThirtyMinuteBreak ? 'text-stone-500' : 'text-amber-700'}`}>
-                            {entry.candidates.best.breakStatus.label}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    {entry.candidates.free.length > 0 ? (
-                      <div className="mt-3">
-                        <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-2">Fria kandidater</p>
-                        <div className="flex flex-wrap gap-2">
-                          {entry.candidates.free.slice(0, 6).map(candidate => (
-                            <span key={`free-${entry.task.id}-${candidate.person.id}`} className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200">
-                              <span>{candidate.person.name}</span>
-                              <span>{candidate.shift[0]}–{candidate.shift[1]}</span>
-                              {candidate.preferredCoverMatch && <span>· förstaval</span>}
-                              {candidate.sameDept && <span>· samma avd.</span>}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-amber-700 mt-3">Inga helt fria kandidater hittades inom samma tidsfönster.</p>
-                    )}
-                    {entry.candidates.busy.length > 0 && (
-                      <div className="mt-3">
-                        <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-2">På plats men redan bokade</p>
-                        <div className="flex flex-wrap gap-2">
-                          {entry.candidates.busy.slice(0, 4).map(candidate => (
-                            <span key={`busy-${entry.task.id}-${candidate.person.id}`} className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] bg-stone-100 text-stone-700 ring-1 ring-stone-200">
-                              <span>{candidate.person.name}</span>
-                              <span>{candidate.reasons[0] || candidate.overlapping[0]?.label || 'krockar'}</span>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4">
-              <h2 className="display-font text-xl text-stone-800">Det som faller bort</h2>
-              <p className="text-sm text-stone-500 mt-0.5">Här ser du pass och uppdrag som försvinner när någon markeras som frånvarande.</p>
-              <div className="space-y-3 mt-4">
-                {absentRows.length === 0 ? (
-                  <div className="rounded-2xl bg-stone-50 ring-1 ring-stone-200 p-5 text-sm text-stone-500">
-                    Ingen frånvaro markerad ännu.
-                  </div>
-                ) : absentRows.map(row => (
-                  <div key={`lost-${row.person.id}`} className="rounded-2xl bg-stone-50 ring-1 ring-stone-200 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>{row.person.name}</p>
-                        <p className="text-xs text-stone-500 mt-1">{row.shift[0]}–{row.shift[1]} · {row.dept.name}</p>
-                      </div>
-                      <span className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800">{row.tasks.length} uppdrag</span>
-                    </div>
-                    {row.tasks.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5 mt-3">
-                        {row.tasks.map(task => {
-                          const meta = getAssignmentTypeMeta(task.type);
-                          return (
-                            <span
-                              key={`lost-task-${task.id}`}
-                              className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] ring-1"
-                              style={{ backgroundColor: `${meta.color}16`, borderColor: `${meta.color}4D`, color: '#44403c' }}
-                            >
-                              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: meta.color }} />
-                              <span className="tabular-nums">{minToTime(task.start)}–{minToTime(task.end)}</span>
-                              <span>{task.label}</span>
-                              {assignmentIsBoundaryType(task.type) && <span>· ansvar</span>}
-                              {task.mustCover && <span className="text-amber-700">· täck</span>}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-stone-500 mt-3">Inga uppdrag inlagda på den här dagen ännu.</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+                  {row.isAbsent ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium" style={{ color: '#B45309' }}>
+                      <CheckCircle2 size={13} />Frånvaro
+                    </span>
+                  ) : (
+                    <span className="text-[10.5px] text-stone-400 px-1.5 py-0.5">Markera</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4">
-        <h2 className="display-font text-xl text-stone-800">Bemanningsläge efter frånvaro</h2>
-        <p className="text-sm text-stone-500 mt-0.5">Det här är en snabb kontroll mot samma bemanningsblock som planeringen använder. Den visar hur dagens frånvaro påverkar täckningen, utan att skriva om grundschemat.</p>
+      <style>{`@keyframes driftPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }`}</style>
+    </div>
+  );
+}
 
-        {gapIssues.length === 0 && overIssues.length === 0 ? (
-          <div className="rounded-2xl bg-emerald-50 ring-1 ring-emerald-200 p-5 text-sm text-emerald-800 mt-4">
-            Inga direkta bemanningsavvikelser hittades för {getDayMeta(dayKey).label.toLowerCase()} i det här driftläget.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
-            <div className="rounded-2xl bg-amber-50 ring-1 ring-amber-200 p-4">
-              <p className="text-xs uppercase tracking-wider text-amber-700 mb-2">Saknas personal</p>
-              <div className="space-y-2">
-                {gapIssues.length === 0 ? (
-                  <p className="text-sm text-stone-600">Inga luckor upptäckta.</p>
-                ) : gapIssues.map((issue, idx) => (
-                  <div key={`gap-${issue.scopeKey}-${issue.start}-${idx}`} className="rounded-xl bg-white/70 px-3 py-2 text-sm text-stone-700">
-                    <span style={{ fontWeight: 500 }}>{issue.scopeLabel}</span>
-                    <span> · {minToTime(issue.start)}–{minToTime(issue.end)} · saknar {issue.delta}</span>
-                    <div className="text-xs text-stone-500 mt-1">Har {issue.actual}, behöver {issue.target}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-2xl bg-stone-50 ring-1 ring-stone-200 p-4">
-              <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Fler än planerat</p>
-              <div className="space-y-2">
-                {overIssues.length === 0 ? (
-                  <p className="text-sm text-stone-600">Ingen tydlig överbemanning upptäckt.</p>
-                ) : overIssues.map((issue, idx) => (
-                  <div key={`over-${issue.scopeKey}-${issue.start}-${idx}`} className="rounded-xl bg-white px-3 py-2 text-sm text-stone-700 ring-1 ring-stone-200">
-                    <span style={{ fontWeight: 500 }}>{issue.scopeLabel}</span>
-                    <span> · {minToTime(issue.start)}–{minToTime(issue.end)} · +{issue.delta}</span>
-                    <div className="text-xs text-stone-500 mt-1">Har {issue.actual}, planerat {issue.target}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+// ---- Drift KPI tile ----
+function DriftKpi({ label, value, sub, tone, highlight }) {
+  const palette = {
+    amber:   { fg: '#B45309', bg: '#FEF3C7', ring: '#FDE68A' },
+    rose:    { fg: '#BE123C', bg: '#FFE4E6', ring: '#FECDD3' },
+    emerald: { fg: '#047857', bg: '#D1FAE5', ring: '#A7F3D0' },
+  };
+  const t = palette[tone];
+  return (
+    <div className="bg-white rounded-xl px-3.5 py-3" style={{
+      boxShadow: `inset 0 0 0 1px ${highlight && t ? t.ring : '#E7E5E4'}`,
+      background: highlight && t ? t.bg : '#fff',
+    }}>
+      <div className="text-[10.5px] font-semibold uppercase tracking-wider text-stone-500">{label}</div>
+      <div className="display-font tabular-nums" style={{ fontSize: 30, lineHeight: 1.05, color: t ? t.fg : '#1C1917', fontWeight: 500, letterSpacing: '-0.02em', marginTop: 2 }}>{value}</div>
+      <div className="text-[11px] text-stone-500 mt-0.5">{sub}</div>
     </div>
   );
 }
@@ -6919,10 +6920,740 @@ function RulesView({ blocks, setBlocks, departments, staff, passBank, fridayCycl
   );
 }
 
+// -------- Fredagsrull View (own tab) --------
+
+function FridayRollView({ staff, fridayTemplateRotation, setFridayTemplateRotation, fridayCycleWeeks, setFridayCycleWeeks, currentFridayWeek, departments }) {
+  const [layout, setLayout] = useState('matrix'); // 'matrix' | 'person'
+
+  const N = fridayCycleWeeks;
+  const TIME_START = 360, TIME_END = 1080;
+  const pctFn = (m) => Math.max(0, Math.min(100, ((m - TIME_START) / (TIME_END - TIME_START)) * 100));
+  const toMin = (sh) => Array.isArray(sh)
+    ? [timeToMin(sh[0]), timeToMin(sh[1])]
+    : null;
+
+  const updateTemplateWeek = (weekIdx, idx, val) => {
+    const next = resizeRotation(fridayTemplateRotation, N);
+    const cur = next[weekIdx] || ['',''];
+    next[weekIdx] = idx === 0 ? [val, cur[1]] : [cur[0], val];
+    if (!next[weekIdx][0] && !next[weekIdx][1]) next[weekIdx] = null;
+    setFridayTemplateRotation(next);
+  };
+  const setTemplateWeekOff = (weekIdx, off) => {
+    const next = resizeRotation(fridayTemplateRotation, N);
+    next[weekIdx] = off ? null : ['07:00','15:30'];
+    setFridayTemplateRotation(next);
+  };
+
+  const rotators = staff.filter(p => p.fridayMode === 'rotation' && p.fridayUseTemplate);
+  const fixedFriday = staff.filter(p => p.fridayMode === 'fixed');
+  const passbankFriday = staff.filter(p => p.fridayMode === 'passbank');
+  const offFriday = staff.filter(p => (p.daysOff || []).includes('fri') || (p.fridayMode === 'fixed' && !p.fridayShift));
+
+  return (
+    <div className="space-y-4">
+      <TabIntro>
+        Fredagsrullen är en mall som upprepas. Bygg en central mall här, låt varje person välja vilken vecka i mallen som ska vara deras vecka 1, och lägg ev. egna undantag i Personal-fliken.
+      </TabIntro>
+
+      {/* Top summary */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <PbStat label="Cykellängd" value={`${N} v`} sub="i fredagsrullen" />
+        <PbStat label="Pågående fredag" value={`v.${currentFridayWeek}`} sub="just nu" />
+        <PbStat label="Roterar enligt mall" value={rotators.length} sub="personer med Rull" />
+        <PbStat label="Fast fredagstid" value={fixedFriday.filter(p => p.fridayShift && !(p.daysOff || []).includes('fri')).length} sub="fast tid varje fredag" />
+        <PbStat label="Passbank på fredag" value={passbankFriday.length} sub="ingår i pussel" />
+      </div>
+
+      {/* Central template editor */}
+      <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4">
+        <div className="flex items-end justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h2 className="display-font text-lg text-stone-800">Central fredagsmall</h2>
+            <p className="text-xs text-stone-500 mt-0.5">Personer i mallen-läge rullar enligt detta. Var och en kan ha egen startvecka och egna avvikelser.</p>
+          </div>
+          <div className="flex items-center gap-2 bg-stone-50 rounded-lg px-3 py-1.5">
+            <span className="text-xs text-stone-500">Antal veckor</span>
+            <button onClick={() => setFridayCycleWeeks(Math.max(1, N - 1))} className="w-6 h-6 rounded bg-white ring-1 ring-stone-200 hover:bg-stone-100 transition flex items-center justify-center text-stone-600">−</button>
+            <span className="display-font text-base text-stone-800 tabular-nums" style={{ fontWeight: 500, minWidth: 18, textAlign: 'center' }}>{N}</span>
+            <button onClick={() => setFridayCycleWeeks(Math.min(20, N + 1))} className="w-6 h-6 rounded bg-white ring-1 ring-stone-200 hover:bg-stone-100 transition flex items-center justify-center text-stone-600">+</button>
+          </div>
+        </div>
+        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(N, 8)}, minmax(0, 1fr))` }}>
+          {Array.from({ length: N }, (_, w) => {
+            const sh = fridayTemplateRotation[w];
+            const isOff = sh == null;
+            const isCurrent = (w + 1) === currentFridayWeek;
+            return (
+              <div key={w} className="rounded-xl p-2.5" style={{
+                background: isCurrent ? '#FFF6EF' : '#FCFAF6',
+                boxShadow: isCurrent ? 'inset 0 0 0 1.5px #D97757' : 'inset 0 0 0 1px #E7E5E4',
+              }}>
+                <div className="text-[10px] font-semibold tracking-wider uppercase mb-1" style={{ color: isCurrent ? '#D97757' : '#A8A29E' }}>
+                  v.{w + 1}{isCurrent && ' · NU'}
+                </div>
+                {isOff ? (
+                  <div className="text-xs text-stone-400 italic">Ledig</div>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    <input type="time" value={sh[0]} onChange={e => updateTemplateWeek(w, 0, e.target.value)}
+                      className="rules-input text-xs px-1.5 py-1 w-full tabular-nums" />
+                    <input type="time" value={sh[1]} onChange={e => updateTemplateWeek(w, 1, e.target.value)}
+                      className="rules-input text-xs px-1.5 py-1 w-full tabular-nums" />
+                  </div>
+                )}
+                <button onClick={() => setTemplateWeekOff(w, !isOff)}
+                  className="text-[10px] mt-1.5 px-2 py-0.5 rounded-full transition w-full"
+                  style={{ background: isOff ? '#1C1917' : '#F5F5F4', color: isOff ? '#fff' : '#78716C' }}>
+                  {isOff ? 'Sätt tid' : 'Ledig'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* View toggle */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="display-font text-lg text-stone-800">Personalens fredagar</h2>
+          <p className="text-xs text-stone-500 mt-0.5">Växla mellan matris (alla veckor) och per-person (en rad per kollega med tidslinjer).</p>
+        </div>
+        <div className="inline-flex p-1 rounded-lg bg-stone-100">
+          <button onClick={() => setLayout('matrix')}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${layout === 'matrix' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>
+            Matris
+          </button>
+          <button onClick={() => setLayout('person')}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${layout === 'person' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>
+            Per person
+          </button>
+        </div>
+      </div>
+
+      {staff.length === 0 ? (
+        <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-12 text-center">
+          <Repeat size={28} className="mx-auto text-stone-300 mb-2" />
+          <div className="display-font text-lg text-stone-800 mb-1">Ingen personal än</div>
+          <p className="text-sm text-stone-500">Lägg till personal i Personal-fliken så syns de här.</p>
+        </div>
+      ) : layout === 'matrix' ? (
+        <FridayMatrixView staff={staff} departments={departments} N={N} currentFridayWeek={currentFridayWeek} fridayTemplateRotation={fridayTemplateRotation} />
+      ) : (
+        <FridayPersonView staff={staff} departments={departments} N={N} currentFridayWeek={currentFridayWeek} fridayTemplateRotation={fridayTemplateRotation} pctFn={pctFn} toMin={toMin} TIME_START={TIME_START} TIME_END={TIME_END} />
+      )}
+    </div>
+  );
+}
+
+function FridayMatrixView({ staff, departments, N, currentFridayWeek, fridayTemplateRotation }) {
+  return (
+    <div className="bg-white rounded-2xl ring-1 ring-stone-200 overflow-hidden">
+      <div className="px-4 py-3 border-b border-stone-200 flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap text-[11px] text-stone-500">
+          <span className="inline-flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#D97757' }} />Pågående vecka</span>
+          <span className="inline-flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#FEF3C7', boxShadow: 'inset 0 0 0 1px #FDE68A' }} />Avvikelse</span>
+          <span className="inline-flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#F5F5F4' }} />Ledig fredag</span>
+        </div>
+      </div>
+      <div className="grid gap-px bg-stone-200" style={{ gridTemplateColumns: `220px repeat(${N}, 1fr) 70px` }}>
+        <div className="bg-stone-50 px-3 py-2 text-[10.5px] uppercase tracking-wider text-stone-500 font-semibold">Person</div>
+        {Array.from({ length: N }, (_, i) => {
+          const w = i + 1;
+          const isCurrent = w === currentFridayWeek;
+          return (
+            <div key={w} className="px-2 py-2 text-center text-[11px] font-semibold relative"
+              style={{ background: isCurrent ? '#FFF6EF' : '#FAFAF9', color: isCurrent ? '#D97757' : '#A8A29E' }}>
+              v.{w}
+              {isCurrent && <div className="absolute left-0 right-0 bottom-0 h-0.5" style={{ background: '#D97757' }} />}
+            </div>
+          );
+        })}
+        <div className="bg-stone-50 px-2 py-2 text-center text-[10.5px] uppercase tracking-wider text-stone-500 font-semibold">Snitt</div>
+        {staff.map(person => {
+          const dept = getDept(person.deptId, departments);
+          const isOffAlways = (person.daysOff || []).includes('fri');
+          const modeLabel = person.fridayMode === 'fixed' ? 'Fast' : person.fridayMode === 'passbank' ? 'Passbank' : person.fridayMode === 'rotation' && person.fridayUseTemplate ? 'Mall' : person.fridayMode === 'rotation' ? 'Egen' : '–';
+          const modeColor = person.fridayMode === 'fixed' ? '#78716C' : person.fridayMode === 'passbank' ? '#0284C7' : person.fridayMode === 'rotation' && person.fridayUseTemplate ? '#D97757' : '#B45309';
+          // Build effective rotation for display
+          const cells = Array.from({ length: N }, (_, idx) => {
+            const w = idx + 1;
+            if (isOffAlways) return { kind: 'off' };
+            if (person.fridayMode === 'fixed') return person.fridayShift ? { kind: 'shift', shift: person.fridayShift, overrideFlag: false } : { kind: 'off' };
+            if (person.fridayMode === 'passbank') return { kind: 'passbank' };
+            if (person.fridayMode === 'rotation') {
+              const isOverride = hasFridayTemplateOverride(person, w);
+              const shift = getFridayShift(person, w, N, fridayTemplateRotation);
+              if (!shift) return { kind: 'off', overrideFlag: isOverride };
+              return { kind: 'shift', shift, overrideFlag: isOverride };
+            }
+            return { kind: 'unknown' };
+          });
+          const workedMins = cells.filter(c => c.kind === 'shift').map(c => workedDayMinutes(c.shift));
+          const avg = workedMins.length ? Math.round(workedMins.reduce((a, b) => a + b, 0) / N) : 0;
+
+          return (
+            <React.Fragment key={person.id}>
+              <div className="bg-white px-3 py-2 flex items-center gap-2 min-w-0">
+                <span className="inline-flex items-center justify-center text-[10px] font-semibold shrink-0" style={{ width: 22, height: 22, borderRadius: '50%', background: softColor(dept.color), color: dept.color, boxShadow: `inset 0 0 0 1px ${dept.color}33` }}>
+                  {person.name.split(' ').map(n => n[0]).slice(0,2).join('').toUpperCase()}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs truncate" style={{ color: '#1C1917', fontWeight: 500 }}>{person.name}</div>
+                  <div className="text-[10.5px] text-stone-500 flex items-center gap-1 truncate">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dept.color }} />
+                    <span>{person.percent || 100}%</span>
+                    <span className="text-stone-300">·</span>
+                    <span style={{ color: modeColor, fontWeight: 500 }}>{modeLabel}</span>
+                  </div>
+                </div>
+              </div>
+              {cells.map((c, i) => {
+                const w = i + 1;
+                const isCurrent = w === currentFridayWeek;
+                const bg = isCurrent ? '#FFF6EF' : c.overrideFlag ? '#FEF3C7' : '#fff';
+                return (
+                  <div key={w} className="px-2 py-2 text-center text-[11px] tabular-nums"
+                    style={{ background: bg, color: c.kind === 'shift' ? (isCurrent ? '#D97757' : '#1C1917') : '#A8A29E', fontWeight: c.kind === 'shift' ? 500 : 400 }}>
+                    {c.kind === 'shift' ? (
+                      <span style={{ whiteSpace: 'nowrap' }}>{c.shift[0]}–{c.shift[1]}</span>
+                    ) : c.kind === 'passbank' ? (
+                      <span className="italic" style={{ color: '#0284C7' }}>passbank</span>
+                    ) : (
+                      <span className="italic">ledig</span>
+                    )}
+                  </div>
+                );
+              })}
+              <div className="bg-white px-2 py-2 text-center text-[11px] text-stone-500 tabular-nums">
+                {avg > 0 ? `${Math.round(avg / 60 * 10) / 10}h` : '–'}
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FridayPersonView({ staff, departments, N, currentFridayWeek, fridayTemplateRotation, pctFn, toMin, TIME_START, TIME_END }) {
+  const hourLabels = [6, 8, 10, 12, 14, 16, 18];
+  return (
+    <div className="space-y-1.5">
+      <div className="grid gap-2 px-4 text-[10px] text-stone-400" style={{ gridTemplateColumns: '190px 1fr' }}>
+        <div></div>
+        <div className="flex tabular-nums select-none">
+          {hourLabels.map(h => <div key={h} className="flex-1">{h.toString().padStart(2,'0')}</div>)}
+        </div>
+      </div>
+      {staff.map(person => {
+        const dept = getDept(person.deptId, departments);
+        const isOffAlways = (person.daysOff || []).includes('fri');
+        const modeLabel = person.fridayMode === 'fixed' ? 'Fast tid' : person.fridayMode === 'passbank' ? 'Via passbank' : person.fridayMode === 'rotation' && person.fridayUseTemplate ? `Mall · start v.${person.fridayTemplateStartWeek || 1}` : person.fridayMode === 'rotation' ? 'Egen rotation' : 'Ej satt';
+        const cells = Array.from({ length: N }, (_, idx) => {
+          const w = idx + 1;
+          if (isOffAlways) return { kind: 'off' };
+          if (person.fridayMode === 'fixed') return person.fridayShift ? { kind: 'shift', shift: person.fridayShift, override: false } : { kind: 'off' };
+          if (person.fridayMode === 'passbank') return { kind: 'passbank' };
+          if (person.fridayMode === 'rotation') {
+            const isOverride = hasFridayTemplateOverride(person, w);
+            const shift = getFridayShift(person, w, N, fridayTemplateRotation);
+            if (!shift) return { kind: 'off', override: isOverride };
+            return { kind: 'shift', shift, override: isOverride };
+          }
+          return { kind: 'off' };
+        });
+        const workedMins = cells.filter(c => c.kind === 'shift').map(c => workedDayMinutes(c.shift));
+        const avg = workedMins.length ? workedMins.reduce((a, b) => a + b, 0) / N : 0;
+        const total = workedMins.reduce((a, b) => a + b, 0);
+
+        return (
+          <div key={person.id} className="bg-white rounded-2xl ring-1 ring-stone-200 p-3">
+            <div className="grid gap-2 items-center" style={{ gridTemplateColumns: '190px 1fr' }}>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center justify-center text-[10px] font-semibold shrink-0" style={{ width: 28, height: 28, borderRadius: '50%', background: softColor(dept.color), color: dept.color, boxShadow: `inset 0 0 0 1px ${dept.color}33` }}>
+                  {person.name.split(' ').map(n => n[0]).slice(0,2).join('').toUpperCase()}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm truncate" style={{ color: '#1C1917', fontWeight: 500 }}>{person.name}</div>
+                  <div className="text-[10.5px] text-stone-500 flex items-center gap-1 truncate">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dept.color }} />
+                    <span>{modeLabel}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-px h-11 rounded-md bg-stone-100 p-px relative">
+                {cells.map((c, i) => {
+                  const w = i + 1;
+                  const isCurrent = w === currentFridayWeek;
+                  const mins = c.kind === 'shift' ? toMin(c.shift) : null;
+                  return (
+                    <div key={w} className="flex-1 relative overflow-hidden rounded-sm" style={{
+                      background: isCurrent ? '#FFF6EF' : '#fff',
+                      boxShadow: isCurrent ? 'inset 0 0 0 1.5px #D97757' : 'none',
+                    }} title={c.kind === 'shift' ? `v.${w} ${c.shift[0]}–${c.shift[1]}` : c.kind === 'passbank' ? `v.${w} passbank` : `v.${w} ledig`}>
+                      <div className="absolute top-0.5 left-1 right-1 flex justify-between items-center text-[9px] font-semibold" style={{ color: isCurrent ? '#D97757' : '#A8A29E' }}>
+                        <span>v.{w}</span>
+                        {c.override && <span className="w-1 h-1 rounded-full" style={{ background: '#B45309' }} title="Avvikelse" />}
+                      </div>
+                      {c.kind === 'shift' && mins && (
+                        <>
+                          <div className="absolute" style={{
+                            bottom: 4, height: 6,
+                            left: `${pctFn(mins[0])}%`,
+                            width: `${pctFn(mins[1]) - pctFn(mins[0])}%`,
+                            background: c.override ? '#B45309' : dept.color,
+                            borderRadius: 2, opacity: 0.85,
+                          }} />
+                          <div className="absolute left-0.5 right-0.5 text-[8.5px] tabular-nums text-center" style={{ bottom: 12, color: '#44403C' }}>
+                            {c.shift[0]}–{c.shift[1]}
+                          </div>
+                        </>
+                      )}
+                      {c.kind === 'passbank' && (
+                        <div className="absolute left-1 right-1 bottom-1 h-3 rounded-sm flex items-center justify-center text-[8px] italic" style={{ background: '#E0F2FE', color: '#0284C7' }}>passbank</div>
+                      )}
+                      {c.kind === 'off' && (
+                        <div className="absolute left-1 right-1 bottom-1 text-[8px] text-stone-400 italic text-center">ledig</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex items-center justify-between mt-2 pl-12 text-[10.5px] text-stone-500">
+              <div className="flex gap-3">
+                <span>Snitt fredagstid: <span style={{ color: '#1C1917', fontWeight: 500 }}>{Math.round(avg / 60 * 10) / 10} h</span></span>
+                <span>Tot. över cykel: <span style={{ color: '#1C1917', fontWeight: 500 }}>{Math.round(total / 60 * 10) / 10} h</span></span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// -------- Pass Editor Modal --------
+
+function PassEditorModal({ pass, departments, isNew, onSave, onClose, onRemove }) {
+  const [draft, setDraft] = useState(() => ({
+    name: pass?.name || 'Nytt pass',
+    start: pass?.start ?? 480,
+    end: pass?.end ?? 960,
+    passType: pass?.passType || inferPassType({ start: pass?.start ?? 480, end: pass?.end ?? 960 }),
+    days: pass?.days?.length ? [...pass.days] : [...WEEKDAY_KEYS],
+    deptId: pass?.deptId || '',
+    instances: pass?.instances ?? 1,
+  }));
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+  const meta = PASS_TYPES.find(t => t.id === draft.passType) || PASS_TYPES[2];
+  const durationMin = Math.max(0, draft.end - draft.start);
+  const durationHours = Math.round(durationMin / 6) / 10;
+  const valid = draft.name.trim() && draft.end > draft.start && draft.days.length > 0;
+
+  const TIME_START = 360, TIME_END = 1080;
+  const pctFn = (m) => Math.max(0, Math.min(100, ((m - TIME_START) / (TIME_END - TIME_START)) * 100));
+
+  const handleSave = () => {
+    if (!valid) return;
+    onSave({ ...pass, ...draft, name: draft.name.trim() });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-[#FCFAF7] rounded-3xl shadow-2xl w-full max-w-xl max-h-[92vh] overflow-hidden ring-1 ring-black/5 flex flex-col"
+        onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-stone-200 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-1 h-9 rounded-full shrink-0" style={{ background: meta.color }} />
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-widest text-stone-500">{isNew ? 'Nytt pass' : 'Redigera pass'}</p>
+              <h2 className="display-font text-2xl text-stone-800 truncate" style={{ letterSpacing: '-0.01em' }}>
+                {draft.name || 'Nytt pass'}
+              </h2>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-700 p-1.5 rounded-lg hover:bg-stone-100 transition shrink-0">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-5 overflow-y-auto">
+          {/* Name */}
+          <div>
+            <label className="text-[10.5px] font-semibold uppercase tracking-wider text-stone-500 block mb-1.5">Namn</label>
+            <input value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} autoFocus
+              className="w-full px-3 py-2 rounded-lg bg-white text-sm text-stone-800 ring-1 ring-stone-200 outline-none focus:ring-stone-400" />
+          </div>
+
+          {/* Time */}
+          <div>
+            <label className="text-[10.5px] font-semibold uppercase tracking-wider text-stone-500 block mb-1.5">Tid</label>
+            <div className="flex items-center gap-3">
+              <TimeTextInput valueMinutes={draft.start} onCommit={m => setDraft(d => ({ ...d, start: m }))}
+                className="px-3 py-2 rounded-lg bg-white text-base text-stone-800 ring-1 ring-stone-200 outline-none focus:ring-stone-400 tabular-nums text-center" style={{ width: 110 }} />
+              <span className="text-stone-300">→</span>
+              <TimeTextInput valueMinutes={draft.end} onCommit={m => setDraft(d => ({ ...d, end: m }))}
+                className="px-3 py-2 rounded-lg bg-white text-base text-stone-800 ring-1 ring-stone-200 outline-none focus:ring-stone-400 tabular-nums text-center" style={{ width: 110 }} />
+              <span className="text-xs text-stone-500 tabular-nums">{durationHours} h ({Math.floor(durationMin/60)}:{(durationMin%60).toString().padStart(2,'0')})</span>
+            </div>
+            <div className="mt-2 relative h-2 rounded-full bg-stone-100">
+              <div className="absolute h-full rounded-full" style={{
+                left: `${pctFn(draft.start)}%`,
+                width: `${pctFn(draft.end) - pctFn(draft.start)}%`,
+                background: meta.color, opacity: 0.7,
+              }} />
+              <div className="absolute -top-1 -bottom-1 w-px bg-stone-300" style={{ left: `${pctFn(8*60)}%` }} title="08:00" />
+              <div className="absolute -top-1 -bottom-1 w-px bg-stone-300" style={{ left: `${pctFn(12*60)}%` }} title="12:00" />
+              <div className="absolute -top-1 -bottom-1 w-px bg-stone-300" style={{ left: `${pctFn(16*60)}%` }} title="16:00" />
+            </div>
+            <div className="flex justify-between text-[10px] text-stone-400 tabular-nums mt-1">
+              <span>06:00</span><span>10:00</span><span>14:00</span><span>18:00</span>
+            </div>
+          </div>
+
+          {/* Type */}
+          <div>
+            <label className="text-[10.5px] font-semibold uppercase tracking-wider text-stone-500 block mb-1.5">Passtyp</label>
+            <div className="grid grid-cols-5 gap-1.5">
+              {PASS_TYPES.map(t => {
+                const active = draft.passType === t.id;
+                return (
+                  <button key={t.id} type="button" onClick={() => setDraft(d => ({ ...d, passType: t.id }))}
+                    className="rounded-lg px-2 py-2 text-xs font-medium transition"
+                    style={{
+                      background: active ? t.color : '#fff',
+                      color: active ? '#fff' : t.color,
+                      boxShadow: `inset 0 0 0 ${active ? 2 : 1}px ${t.color}${active ? '' : '55'}`,
+                    }}>
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Days */}
+          <div>
+            <label className="text-[10.5px] font-semibold uppercase tracking-wider text-stone-500 block mb-1.5">Dagar</label>
+            <div className="flex gap-1.5">
+              {DAY_META.map(day => {
+                const on = draft.days.includes(day.key);
+                return (
+                  <button key={day.key} type="button" onClick={() => setDraft(d => ({
+                    ...d, days: on ? d.days.filter(k => k !== day.key) : [...d.days, day.key],
+                  }))}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${on ? 'bg-stone-800 text-white' : 'bg-white text-stone-500 ring-1 ring-stone-200 hover:bg-stone-50'}`}>
+                    {day.short}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-stone-500 mt-1.5">Markera vilka dagar passet ska kunna tilldelas. Aktivera <strong>fre</strong> för att kunna ge det till personer med <em>Passbank</em>-läge på fredag.</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {/* Avdelning */}
+            <div>
+              <label className="text-[10.5px] font-semibold uppercase tracking-wider text-stone-500 block mb-1.5">Avdelning</label>
+              <select value={draft.deptId} onChange={e => setDraft(d => ({ ...d, deptId: e.target.value }))}
+                className="w-full px-3 py-2 rounded-lg bg-white text-sm text-stone-800 ring-1 ring-stone-200 outline-none focus:ring-stone-400 cursor-pointer">
+                <option value="">Alla avdelningar</option>
+                {departments.map(dept => <option key={dept.id} value={dept.id}>{dept.name}</option>)}
+              </select>
+            </div>
+
+            {/* Antal */}
+            <div>
+              <label className="text-[10.5px] font-semibold uppercase tracking-wider text-stone-500 block mb-1.5">
+                Antal {draft.instances === 0 ? <span className="text-stone-400 italic font-normal normal-case tracking-normal">obegränsat</span> : null}
+              </label>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setDraft(d => ({ ...d, instances: Math.max(0, d.instances - 1) }))}
+                  className="w-9 h-9 rounded-lg bg-white text-stone-500 ring-1 ring-stone-200 hover:bg-stone-50 transition flex items-center justify-center">−</button>
+                <input type="number" min="0" value={draft.instances}
+                  onChange={e => setDraft(d => ({ ...d, instances: Math.max(0, parseInt(e.target.value || '0', 10)) }))}
+                  className="flex-1 px-3 py-2 rounded-lg bg-white text-base text-center text-stone-800 ring-1 ring-stone-200 outline-none focus:ring-stone-400 tabular-nums" />
+                <button type="button" onClick={() => setDraft(d => ({ ...d, instances: d.instances + 1 }))}
+                  className="w-9 h-9 rounded-lg bg-white text-stone-500 ring-1 ring-stone-200 hover:bg-stone-50 transition flex items-center justify-center">+</button>
+              </div>
+              <p className="text-[11px] text-stone-500 mt-1.5">Max antal personer per dag. 0 = obegränsat.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-stone-200 bg-white/85 flex items-center justify-between gap-3 flex-shrink-0">
+          {!isNew && onRemove ? (
+            <button onClick={() => { if (confirm(`Ta bort passet "${draft.name}"?`)) onRemove(); }}
+              className="px-3 py-2 rounded-lg text-sm text-rose-600 hover:bg-rose-50 transition flex items-center gap-1.5">
+              <Trash2 size={14} />Ta bort
+            </button>
+          ) : <span />}
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition">Avbryt</button>
+            <button onClick={handleSave} disabled={!valid}
+              className="px-5 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
+              <CheckCircle2 size={14} />{isNew ? 'Lägg till' : 'Spara'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -------- Passbank View (own tab) --------
+
+function PassbankView({ passBank, setPassBank, staff, setStaff, departments }) {
+  const passes = normalizePassBank(passBank);
+  const [query, setQuery] = useState('');
+  const [filterType, setFilterType] = useState('');
+  const [filterDept, setFilterDept] = useState('');
+  const [editorState, setEditorState] = useState(null); // { pass, isNew } or null
+
+  const savePass = (updated) => {
+    if (editorState?.isNew) {
+      const id = updated.id || `pass-${Math.random().toString(36).slice(2, 8)}`;
+      setPassBank([...passes, normalizePass({ ...updated, id })]);
+    } else {
+      setPassBank(normalizePassBank(passes.map(p => p.id === updated.id ? { ...p, ...updated } : p)));
+    }
+    setEditorState(null);
+  };
+  const removePassFromEditor = () => {
+    if (!editorState?.pass) return;
+    if (passes.length <= 1) { alert('Passbanken behöver minst ett pass.'); return; }
+    setPassBank(normalizePassBank(passes.filter(p => p.id !== editorState.pass.id)));
+    setStaff(prev => prev.map(person => ({
+      ...person,
+      allowedPassIds: (person.allowedPassIds || []).filter(passId => passId !== editorState.pass.id),
+    })));
+    setEditorState(null);
+  };
+  const openNew = () => {
+    const last = passes[passes.length - 1] || initialPassBank[0];
+    const start = clamp((last?.start || 480) + 30, 330, 1020);
+    const end = clamp((last?.end || 960) + 30, start + 60, 1080);
+    setEditorState({
+      pass: { name: 'Nytt pass', start, end, days: WEEKDAY_KEYS, deptId: '', passType: inferPassType({ start, end }), instances: 1 },
+      isNew: true,
+    });
+  };
+
+  // Compute usage: how many staff have a shift matching each pass (sum across days)
+  const usage = useMemo(() => {
+    const map = new Map();
+    passes.forEach(pass => {
+      let totalUse = 0;
+      (pass.days || []).forEach(day => {
+        staff.forEach(person => {
+          const shift = normalizeShift(person.sched?.[day]);
+          if (shift && shiftMatchesPass(shift, pass)) totalUse++;
+        });
+      });
+      map.set(pass.id, totalUse);
+    });
+    return map;
+  }, [passes, staff]);
+
+  // Summary stats
+  const TIME_START = 360, TIME_END = 1080;
+  const pctFn = (m) => Math.max(0, Math.min(100, ((m - TIME_START) / (TIME_END - TIME_START)) * 100));
+  const earliestStart = passes.length ? Math.min(...passes.map(p => p.start)) : 0;
+  const latestEnd = passes.length ? Math.max(...passes.map(p => p.end)) : 0;
+  const totalSeats = passes.reduce((s, p) => s + (p.instances || 0), 0);
+  const hasUnlimited = passes.some(p => p.instances === 0);
+
+  const visible = passes.filter(p => {
+    if (filterType && p.passType !== filterType) return false;
+    if (filterDept && p.deptId !== filterDept) return false;
+    if (query && !p.name.toLowerCase().includes(query.toLowerCase())) return false;
+    return true;
+  });
+
+  const passTypeMeta = (id) => PASS_TYPES.find(t => t.id === id) || { id, label: 'Pass', color: '#475569' };
+  const dayLabels = { mon: 'M', tue: 'T', wed: 'O', thu: 'T', fri: 'F' };
+
+  return (
+    <div className="space-y-4">
+      <TabIntro>
+        Passen som generatorn får använda på vardagar. Tid, typ och antal styr hur generatorn pusslar och om passet kan delas av flera. Ändringar slår igenom i Vecka, Generator och Drift.
+      </TabIntro>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <PbStat label="Totalt antal pass" value={passes.length} />
+        <PbStat label="Platser i passbanken" value={totalSeats + (hasUnlimited ? '+' : '')} sub={hasUnlimited ? 'några obegränsade' : 'sammanlagt'} />
+        <PbStat label="Pass per dag (mån–tor)" value={passes.filter(p => p.days.includes('mon')).length} sub="aktiva passmöjligheter" />
+        <PbStat label="Tidigaste start" value={earliestStart ? minToTime(earliestStart) : '–'} sub={earliestStart ? passes.find(p => p.start === earliestStart)?.name : ''} />
+        <PbStat label="Senaste slut" value={latestEnd ? minToTime(latestEnd) : '–'} sub={latestEnd ? passes.find(p => p.end === latestEnd)?.name : ''} />
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 max-w-xs">
+          <span className="absolute left-3 top-2.5 text-stone-400">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          </span>
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Sök pass…"
+            className="w-full pl-9 pr-3 py-2 rounded-lg text-sm bg-white ring-1 ring-stone-200 outline-none focus:ring-stone-400" />
+        </div>
+        <select value={filterType} onChange={e => setFilterType(e.target.value)}
+          className="px-3 py-2 rounded-lg text-sm bg-white ring-1 ring-stone-200 outline-none focus:ring-stone-400">
+          <option value="">Alla typer</option>
+          {PASS_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+        <select value={filterDept} onChange={e => setFilterDept(e.target.value)}
+          className="px-3 py-2 rounded-lg text-sm bg-white ring-1 ring-stone-200 outline-none focus:ring-stone-400">
+          <option value="">Alla avdelningar</option>
+          {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+        <div className="flex-1" />
+        <span className="text-xs text-stone-500">{visible.length} av {passes.length}</span>
+        <button onClick={openNew} className="px-4 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-1.5">
+          <Plus size={14} />Lägg till pass
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl ring-1 ring-stone-200 overflow-hidden">
+        <div className="grid items-center gap-3 px-4 py-2.5 bg-stone-50 border-b border-stone-200 text-[10px] uppercase tracking-wider text-stone-500 font-semibold"
+          style={{ gridTemplateColumns: '2fr 220px 130px 130px 80px 130px 30px' }}>
+          <div>Namn</div>
+          <div>Tid</div>
+          <div>Dagar</div>
+          <div>Typ</div>
+          <div className="text-right">Antal</div>
+          <div>Avdelning</div>
+          <div></div>
+        </div>
+        {visible.length === 0 && (
+          <div className="px-6 py-10 text-center text-sm text-stone-500">
+            Inga pass matchade filtreringen. <button onClick={() => { setQuery(''); setFilterType(''); setFilterDept(''); }} className="underline text-stone-700">Rensa filter</button>
+          </div>
+        )}
+        {visible.map(pass => {
+          const meta = passTypeMeta(pass.passType);
+          const dept = pass.deptId ? getDept(pass.deptId, departments) : null;
+          const used = usage.get(pass.id) || 0;
+          const cap = pass.instances || 0;
+          const full = cap > 0 && used >= cap * (pass.days?.length || 1);
+          const hours = Math.round((pass.end - pass.start) / 6) / 10;
+          return (
+            <button key={pass.id} type="button" onClick={() => setEditorState({ pass, isNew: false })}
+              className="w-full text-left grid items-center gap-3 px-4 py-3 border-b border-stone-100 last:border-0 hover:bg-stone-50 transition"
+              style={{ gridTemplateColumns: '2fr 220px 130px 130px 80px 130px 30px' }}>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-1 h-7 rounded-full shrink-0" style={{ background: meta.color }} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-stone-800 truncate">{pass.name}</div>
+                  <div className="text-[11px] text-stone-500">{hours} h</div>
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-stone-800 tabular-nums">
+                  {minToTime(pass.start)} <span className="text-stone-300">→</span> {minToTime(pass.end)}
+                </div>
+                <div className="relative mt-1.5 h-1.5 rounded-full bg-stone-100">
+                  <div className="absolute h-full rounded-full" style={{
+                    left: `${pctFn(pass.start)}%`,
+                    width: `${pctFn(pass.end) - pctFn(pass.start)}%`,
+                    background: meta.color, opacity: 0.7,
+                  }} />
+                </div>
+              </div>
+              <div className="flex gap-1">
+                {['mon','tue','wed','thu','fri'].map(day => {
+                  const on = pass.days.includes(day);
+                  return (
+                    <span key={day}
+                      className={`w-6 h-6 rounded-md text-[10.5px] font-semibold flex items-center justify-center ${on ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-400'}`}
+                      title={DAY_META.find(d => d.key === day)?.label}>
+                      {dayLabels[day]}
+                    </span>
+                  );
+                })}
+              </div>
+              <div>
+                <span className="text-xs px-2 py-1 rounded-full inline-block"
+                  style={{ color: meta.color, boxShadow: `inset 0 0 0 1px ${meta.color}44`, background: '#fff' }}>
+                  {meta.label}
+                </span>
+              </div>
+              <div className="text-right">
+                {cap === 0 ? (
+                  <span className="text-xs text-stone-400 italic">obegr.</span>
+                ) : (
+                  <span className="display-font tabular-nums" style={{ fontSize: 16, fontWeight: 500, color: full ? '#B45309' : '#1C1917' }}>
+                    {cap}
+                    {full && <span className="ml-1.5 text-[10px] font-semibold normal-case tracking-normal" style={{ color: '#B45309' }}>fullt</span>}
+                  </span>
+                )}
+              </div>
+              <div>
+                {dept ? (
+                  <span className="inline-flex items-center gap-1.5 text-[11.5px] px-2 py-0.5 rounded-full"
+                    style={{ background: softColor(dept.color), color: dept.color, boxShadow: `inset 0 0 0 1px ${dept.color}44` }}>
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dept.color }} />
+                    {dept.name}
+                  </span>
+                ) : (
+                  <span className="text-xs text-stone-400">– alla –</span>
+                )}
+              </div>
+              <div className="flex justify-end">
+                <ChevronRight size={15} className="text-stone-300" />
+              </div>
+            </button>
+          );
+        })}
+        <button onClick={openNew} className="w-full px-4 py-3 text-sm text-stone-400 hover:text-stone-700 hover:bg-stone-50 transition flex items-center justify-center gap-2 border-t border-dashed border-stone-200">
+          <Plus size={15} />Lägg till nytt pass
+        </button>
+      </div>
+
+      <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
+        <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Så används passbanken</p>
+        <div className="space-y-1 text-sm text-stone-600 leading-relaxed">
+          <p>Generatorn väljer i första hand bland dessa pass i stället för att hitta på fria tider. Klicka på en rad för att redigera tid, typ, dagar, antal och avdelning.</p>
+          <p><strong>Antal:</strong> max antal personer per dag som kan ha just det här passet. 1 betyder unikt (bara en stänger t.ex.), högre om flera kan ha samma passtider, 0 för obegränsat.</p>
+          <p>Pass kan göras avdelningsspecifika eller gälla alla avdelningar. Aktivera <strong>F</strong> på ett pass om det ska kunna tilldelas personal som valt <strong>Passbank</strong> som fredagshantering.</p>
+        </div>
+      </div>
+
+      {editorState && (
+        <PassEditorModal
+          pass={editorState.pass}
+          isNew={editorState.isNew}
+          departments={departments}
+          onSave={savePass}
+          onClose={() => setEditorState(null)}
+          onRemove={editorState.isNew ? null : removePassFromEditor}
+        />
+      )}
+    </div>
+  );
+}
+
+function PbStat({ label, value, sub }) {
+  return (
+    <div className="bg-white rounded-xl ring-1 ring-stone-200 px-3.5 py-3">
+      <div className="text-[10.5px] font-semibold uppercase tracking-wider text-stone-500">{label}</div>
+      <div className="display-font tabular-nums" style={{ fontSize: 22, lineHeight: 1.1, color: '#1C1917', fontWeight: 500, letterSpacing: '-0.02em', marginTop: 2 }}>{value}</div>
+      {sub && <div className="text-[11px] text-stone-500 mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+
 // -------- Settings View (departments etc.) --------
 
 function SettingsView({ departments, setDepartments, staff, setStaff, coverageBlocks, setCoverageBlocks,
-                        passBank, setPassBank, fridayTemplateRotation, setFridayTemplateRotation, fridayCycleWeeks, setFridayCycleWeeks, onLoadExample, onClearAll }) {
+                        passBank, setPassBank, fridayTemplateRotation, setFridayTemplateRotation, fridayCycleWeeks, setFridayCycleWeeks, onLoadExample, onClearAll, mode = 'all' }) {
   const updateDept = (id, patch) => setDepartments(departments.map(d => d.id === id ? { ...d, ...patch } : d));
   const removeDept = (id) => {
     const usedBy = staff.filter(s => s.deptId === id);
@@ -6988,10 +7719,23 @@ function SettingsView({ departments, setDepartments, staff, setStaff, coverageBl
 
   return (
     <div className="space-y-4">
+      {(mode === 'all' || mode === 'settings') && (
       <TabIntro>
-        Övergripande inställningar för fritidshemmet. Här ändrar du avdelningar, passbanken som generatorn får använda, fredagsrullens cykellängd och hanterar din data.
+        Övergripande inställningar. Här ändrar du avdelningar, arbetsflöde och hanterar din data. <em>Passbank</em> och <em>Fredagsrull</em> har egna flikar nu — du hittar dem i sidopanelen.
       </TabIntro>
+      )}
+      {mode === 'passbank' && (
+      <TabIntro>
+        Passen som generatorn får använda på vardagar. Tid, typ och antal styr hur generatorn pusslar och om passet kan delas av flera. Ändringar slår igenom i Vecka, Generator och Drift.
+      </TabIntro>
+      )}
+      {mode === 'friday' && (
+      <TabIntro>
+        Fredagsrullen är en mall som upprepas. Bygg en central mall här, låt varje person välja vilken vecka i mallen som ska vara deras vecka 1, och lägg ev. egna undantag i Personal-fliken.
+      </TabIntro>
+      )}
       {/* Avdelningar */}
+      {(mode === 'all' || mode === 'settings') && (
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-5">
         <div className="flex items-start justify-between mb-4">
           <div>
@@ -7046,7 +7790,9 @@ function SettingsView({ departments, setDepartments, staff, setStaff, coverageBl
           </div>
         )}
       </div>
+      )}
 
+      {(mode === 'all' || mode === 'passbank') && (
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-5">
         <div className="flex items-start justify-between mb-4 gap-4 flex-wrap">
           <div>
@@ -7152,8 +7898,10 @@ function SettingsView({ departments, setDepartments, staff, setStaff, coverageBl
           </div>
         </div>
       </div>
+      )}
 
       {/* Fredagsrullen */}
+      {(mode === 'all' || mode === 'friday') && (
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-5">
         <div className="flex items-start justify-between mb-4 gap-4 flex-wrap">
           <div>
@@ -7255,8 +8003,10 @@ function SettingsView({ departments, setDepartments, staff, setStaff, coverageBl
           </div>
         )}
       </div>
+      )}
 
       {/* Data — exempel och rensning */}
+      {(mode === 'all' || mode === 'settings') && (
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-5">
         <h2 className="display-font text-xl text-stone-800">Data</h2>
         <p className="text-sm text-stone-500 mt-0.5 mb-4">Återställning och flera olika testscenarier. Påverkar all personal och ersätter nuvarande data.</p>
@@ -7284,6 +8034,7 @@ function SettingsView({ departments, setDepartments, staff, setStaff, coverageBl
           </div>
         </div>
       </div>
+      )}
 
       <style>{`
         .rules-input { background: white; border: 1px solid #e7e5e4; border-radius: 6px; padding: 5px 8px; font-size: 13px; color: #1c1917; outline: none; }
@@ -7787,7 +8538,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                 <div className="rounded-lg bg-stone-50 ring-1 ring-stone-200 p-3 text-sm text-stone-600">
                   <p>Fredag genereras automatiskt från passbanken — precis som mån-tor.</p>
                   <p className="text-xs text-stone-500 mt-1">
-                    Tipsa: aktivera fredag som dag på relevanta pass i passbanken (Inställningar ? Passbank) så att generatorn kan tilldela dem.
+                    Tipsa: aktivera fredag som dag på relevanta pass i passbanken (fliken Passbank) så att generatorn kan tilldela dem.
                   </p>
                 </div>
                 {form.sched?.fri ? (
@@ -7898,7 +8649,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                   })}
                 </div>
                 <p className="text-[10px] text-stone-400 mt-2">
-                  Snitt över cykeln räknas in i veckotidsmålet på plats. Cykellängden ändras under Inställningar.
+                  Snitt över cykeln räknas in i veckotidsmålet på plats. Cykellängden ändras i fliken Fredagsrull.
                 </p>
               </div>
             )}
