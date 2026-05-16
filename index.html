@@ -23,6 +23,9 @@ Källkod, struktur och innehåll får inte kopieras eller spridas utan tillstån
 <!-- lucide-react — vi använder den globala lucide UMD-byggen och plockar ikonerna manuellt -->
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 
+<!-- xlsx-js-style för Excel-export med cell-färger. Drop-in för SheetJS men stöder cell.s (styles). -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+
 <style>
   body { margin: 0; background: #FBF8F4; }
   /* Försäkrar att font-imports fungerar innan Tailwind kommer på plats */
@@ -418,6 +421,75 @@ const ASSIGNMENT_TYPES = [
   { id: 'other', label: 'Övrigt', color: '#6b7280', short: 'Övrigt' },
 ];
 const ASSIGNMENT_TYPE_IDS = ASSIGNMENT_TYPES.map(type => type.id);
+
+// ---- Färg-override-system för uppdragstyper ----
+// Spar färgval i localStorage så att användare kan anpassa paletten utan
+// att appen skrivs om. Samma palett används både i tidslinjen och i
+// Excel-exporten — overrides läses här en gång och muteras vid spar.
+const ASSIGNMENT_COLORS_STORAGE_KEY = 'schemafix-assignment-colors-v1';
+const COLOR_WIZARD_SEEN_KEY = 'schemafix-color-wizard-seen-v1';
+const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+const ASSIGNMENT_DEFAULT_COLORS = Object.freeze(
+  Object.fromEntries(ASSIGNMENT_TYPES.map(type => [type.id, type.color]))
+);
+// Modul-nivå mutable map: id → '#rrggbb'. Tom vid start, fylls från localStorage nedan.
+const ASSIGNMENT_TYPE_COLOR_OVERRIDES = {};
+function isValidHexColor(value) {
+  return typeof value === 'string' && HEX_COLOR_REGEX.test(value);
+}
+function loadAssignmentColorOverridesFromStorage() {
+  try {
+    const raw = localStorage.getItem(ASSIGNMENT_COLORS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const result = {};
+    for (const id of ASSIGNMENT_TYPE_IDS) {
+      if (isValidHexColor(parsed[id])) result[id] = parsed[id];
+    }
+    return result;
+  } catch (err) {
+    console.warn('Kunde inte läsa färg-overrides från localStorage:', err);
+    return {};
+  }
+}
+// Initiera modul-mappen från localStorage vid skript-load.
+(function hydrateAssignmentColors() {
+  const stored = loadAssignmentColorOverridesFromStorage();
+  for (const [id, hex] of Object.entries(stored)) {
+    ASSIGNMENT_TYPE_COLOR_OVERRIDES[id] = hex;
+  }
+})();
+function saveAssignmentColorOverridesToStorage(map) {
+  try {
+    // Behåll bara värden som faktiskt skiljer sig från default — håller storage rent.
+    const filtered = {};
+    for (const id of ASSIGNMENT_TYPE_IDS) {
+      const value = map?.[id];
+      if (isValidHexColor(value) && value.toLowerCase() !== String(ASSIGNMENT_DEFAULT_COLORS[id]).toLowerCase()) {
+        filtered[id] = value;
+      }
+    }
+    localStorage.setItem(ASSIGNMENT_COLORS_STORAGE_KEY, JSON.stringify(filtered));
+    // Synka modulnivå-mappen så att getAssignmentTypeMeta returnerar nya färger direkt.
+    for (const id of ASSIGNMENT_TYPE_IDS) delete ASSIGNMENT_TYPE_COLOR_OVERRIDES[id];
+    for (const [id, hex] of Object.entries(filtered)) ASSIGNMENT_TYPE_COLOR_OVERRIDES[id] = hex;
+    return true;
+  } catch (err) {
+    console.warn('Kunde inte spara färg-overrides till localStorage:', err);
+    return false;
+  }
+}
+function getAssignmentColor(typeId) {
+  return ASSIGNMENT_TYPE_COLOR_OVERRIDES[typeId] || ASSIGNMENT_DEFAULT_COLORS[typeId] || '#6b7280';
+}
+function getColorWizardSeen() {
+  try { return localStorage.getItem(COLOR_WIZARD_SEEN_KEY) === '1'; } catch { return false; }
+}
+function setColorWizardSeen() {
+  try { localStorage.setItem(COLOR_WIZARD_SEEN_KEY, '1'); } catch {}
+}
+
 const ASSIGNMENT_TEMPLATES = [
   { id: 'lesson-40', type: 'lesson', label: 'Lektion 40 min', duration: 40 },
   { id: 'lesson-60', type: 'lesson', label: 'Lektion 60 min', duration: 60 },
@@ -447,7 +519,6 @@ const APP_NAV_ITEMS = [
   // Start
   { k: 'home',     label: 'Hem',         icon: Home,        group: 'start' },
   // Fritids
-  { k: 'schedule', label: 'Schemabygge', icon: Calendar,    group: 'fritids' },
   { k: 'tasks',    label: 'Uppdrag',     icon: Briefcase,   group: 'fritids' },
   { k: 'drift',    label: 'Drift',       icon: AlertCircle, group: 'fritids' },
   // Skola
@@ -460,6 +531,8 @@ const APP_NAV_ITEMS = [
   // Regler & struktur
   { k: 'rules',    label: 'Bemanning',   icon: Clock,       group: 'rules' },
   { k: 'settings', label: 'Inställningar', icon: Settings,  group: 'rules' },
+  // Verktyg (kraftfulla saker man når på behov, snarare än flikar man bor i)
+  { k: 'schedule', label: 'Schemagenerator', icon: Wand2,   group: 'tools' },
 ];
 const APP_NAV_GROUPS = [
   { id: 'start',     label: 'Start' },
@@ -467,6 +540,7 @@ const APP_NAV_GROUPS = [
   { id: 'school',    label: 'Skola' },
   { id: 'resources', label: 'Resurser' },
   { id: 'rules',     label: 'Regler & struktur' },
+  { id: 'tools',     label: 'Verktyg' },
 ];
 
 function normalizeWorkflowMode(mode) {
@@ -504,24 +578,28 @@ function getWorkflowModeMeta(mode) {
 function getWorkflowTour(mode) {
   const normalized = normalizeWorkflowMode(mode);
   if (normalized === WORKFLOW_MODE_EXISTING) {
+    // Befintligt-schema-läget: huvudflödet är att fylla in via Personligt schema
+    // och hantera dagens drift. Generatorn (Verktyg → Schemagenerator) nämns inte
+    // i huvudflödet — den är ett valfritt verktyg, inte ett steg.
     return [
-      { view: 'staff',    title: 'Steg 1 av 8 · Personal',    desc: 'Lägg in kollegorna som redan finns i ert schema. Namn, avdelning, tjänstgöring och fredagsrutin.' },
-      { view: 'schedule', title: 'Steg 2 av 8 · Vecka',       desc: 'Lägg in eller justera befintliga arbetspass direkt. Klicka på en stapel eller rad för att skriva tider manuellt.' },
-      { view: 'tasks',    title: 'Steg 3 av 8 · Uppdrag',     desc: 'När grundpassen finns kan du lägga på lektioner, rastvärd, öppning, stängning, samverkan och andra uppdrag.' },
-      { view: 'drift',    title: 'Steg 4 av 8 · Drift',       desc: 'Markera dagens frånvaro och se direkt vad som faller bort, vad som måste täckas och var luckor uppstår.' },
-      { view: 'passbank', title: 'Steg 5 av 8 · Passbank',    desc: 'Egen flik. Här ligger passen som generatorn (om du vill prova) och Drift väger in när någon faller bort.' },
-      { view: 'friday',   title: 'Steg 6 av 8 · Fredagsrull', desc: 'Egen flik. Bygg en central fredagsmall som personalen kan rotera i — eller behåll fasta fredagar per person.' },
-      { view: 'rules',    title: 'Steg 7 av 8 · Bemanning',   desc: 'Valfritt: lägg in täckningskrav per dag eller avdelning så att Drift kan flagga underbemanning.' },
-      { view: 'settings', title: 'Steg 8 av 8 · Inställningar', desc: 'Avdelningar, arbetsflöde, exempelscenarier och datahantering. Mycket av det som tidigare låg här har nu egna flikar.' },
+      { view: 'staff',    title: 'Steg 1 av 7 · Personal',    desc: 'Lägg in kollegorna som redan finns i ert schema. Namn, avdelning, tjänstgöring och fredagsrutin.' },
+      { view: 'personalSchedule', title: 'Steg 2 av 7 · Personligt schema', desc: 'Bygg varje persons vecka som en tidslinje — dra block för att lägga in befintliga arbetstider, lektioner, rastvärd och övriga uppdrag.' },
+      { view: 'tasks',    title: 'Steg 3 av 7 · Uppdrag',     desc: 'Här ser och redigerar du alla uppdrag samlat per dag. Bra för att överblicka och justera bemanningen.' },
+      { view: 'drift',    title: 'Steg 4 av 7 · Drift',       desc: 'Markera dagens frånvaro och se direkt vad som faller bort, vad som måste täckas och var luckor uppstår.' },
+      { view: 'passbank', title: 'Steg 5 av 7 · Passbank',    desc: 'Egen flik. Här ligger passen som Drift väger in när någon faller bort.' },
+      { view: 'friday',   title: 'Steg 6 av 7 · Fredagsrull', desc: 'Egen flik. Bygg en central fredagsmall som personalen kan rotera i — eller behåll fasta fredagar per person.' },
+      { view: 'settings', title: 'Steg 7 av 7 · Inställningar', desc: 'Avdelningar, arbetsflöde, exempelscenarier och datahantering. Schemagenerator finns under Verktyg om du vill prova att pussla nytt.' },
     ];
   }
+  // Generera-från-scratch-läget: Schemagenerator är en del av flödet, men ligger
+  // numera under Verktyg-gruppen i navigeringen istället för Fritids.
   return [
     { view: 'settings', title: 'Steg 1 av 8 · Inställningar', desc: 'Börja med avdelningar — namn, färg och struktur för hela fritidshemmet.' },
     { view: 'passbank', title: 'Steg 2 av 8 · Passbank',     desc: 'Passbanken är passen som generatorn får använda på vardagar. Tid, typ och antal styr hur appen pusslar.' },
     { view: 'friday',   title: 'Steg 3 av 8 · Fredagsrull',  desc: 'Bygg den centrala fredagscykeln. Personer kan sedan rotera i mallen eller välja fast fredag/passbank.' },
     { view: 'staff',    title: 'Steg 4 av 8 · Personal',     desc: 'Lägg till en kollega i taget med tjänstgöring, tillåtna pass, fredagsrutin och viktiga regler.' },
     { view: 'rules',    title: 'Steg 5 av 8 · Bemanning',    desc: 'Talar om hur många som behöver vara på plats över dagen, gemensamt eller per avdelning.' },
-    { view: 'schedule', title: 'Steg 6 av 8 · Vecka',        desc: 'När grunderna finns kan appen pussla fram förslag. Här ser du resultatet och kan finjustera tider manuellt.' },
+    { view: 'schedule', title: 'Steg 6 av 8 · Schemagenerator', desc: 'Verktyg → Schemagenerator. När grunderna ovan är satta kan appen pussla fram schemaförslag. Här ser du resultatet och kan finjustera tider.' },
     { view: 'tasks',    title: 'Steg 7 av 8 · Uppdrag',      desc: 'När grundschemat sitter lägger du på dagens innehåll som lektioner, rastvärd, öppning, stängning och andra uppdrag.' },
     { view: 'drift',    title: 'Steg 8 av 8 · Drift',        desc: 'Markera frånvaro och se vad som faller bort, vilka uppdrag som måste täckas och var luckor uppstår.' },
   ];
@@ -530,11 +608,11 @@ function getWorkflowTour(mode) {
 function getTabHelpText(tabKey, workflowMode) {
   const mode = normalizeWorkflowMode(workflowMode);
   const map = {
-    home: 'Startplatsen som guidar dig till rätt rum: schemabygge, uppdrag, drift, skola eller import/export.',
+    home: 'Startplatsen som guidar dig till rätt rum: uppdrag, drift, skola, personligt schema eller import/export.',
     school: 'Här samlar vi lärarnas ramtider, undervisningspositioner, grupper och källstöd.',
     schedule: mode === WORKFLOW_MODE_EXISTING
-      ? 'Här lägger du in eller justerar befintliga arbetspass direkt i veckan.'
-      : 'Här granskar du schemaförslag och kan finjustera tider manuellt.',
+      ? 'Schemagenerator — valfritt verktyg. Här kan du pussla ett nytt schemaförslag att jämföra med ditt befintliga.'
+      : 'Schemagenerator — låt appen pussla fram schemaförslag utifrån personal, bemanningskrav och passbank.',
     staff: 'Här lägger du in personal, tjänstgöring, roller, fredagsrutin och viktiga regler.',
     personalSchedule: 'Bygg ett personligt veckoschema för en specifik person genom att dra uppdragsblock på en tidslinje. Sparas som vanliga uppdrag och syns i Drift.',
     tasks: 'Här lägger du uppdrag ovanpå grundschemat, som lektioner, rastvärd, öppning och stängning.',
@@ -548,7 +626,14 @@ function getTabHelpText(tabKey, workflowMode) {
 }
 
 function getAssignmentTypeMeta(typeId) {
-  return ASSIGNMENT_TYPES.find(type => type.id === typeId) || ASSIGNMENT_TYPES[ASSIGNMENT_TYPES.length - 1];
+  const base = ASSIGNMENT_TYPES.find(type => type.id === typeId) || ASSIGNMENT_TYPES[ASSIGNMENT_TYPES.length - 1];
+  // Applicera ev. färg-override från localStorage. Övriga fält (label, short)
+  // är hårdkodade på modul-nivå och kan inte ändras av användaren.
+  const override = ASSIGNMENT_TYPE_COLOR_OVERRIDES[base.id];
+  if (override && override !== base.color) {
+    return { ...base, color: override };
+  }
+  return base;
 }
 
 const SCHOOL_TASK_ROLE_OPTIONS = [
@@ -4082,7 +4167,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v90</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v91</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4244,6 +4329,9 @@ function FritidsSchemaApp() {
           <ScheduleView dayData={dayData} activeDay={activeDay} setActiveDay={setActiveDay} onEdit={setEditingId}
             staffCount={staff.length} onGoToStaff={() => setView('staff')} onLoadExample={loadExample}
             departments={departments} passBank={passBank}
+            coverageBlocks={normalizedCoverageBlocks}
+            onOpenView={setView}
+            onGenerate={handleGenerate} generating={generating}
             fridayCycleWeeks={fridayCycleWeeks} currentFridayWeek={currentFridayWeek}
             setCurrentFridayWeek={setCurrentFridayWeek}
             fridayTemplateRotation={fridayTemplateRotation}
@@ -4719,13 +4807,13 @@ function HomeView({ staff, departments, assignments, driftState, fridayCycleWeek
   const modeMeta = getWorkflowModeMeta(workflowMode);
   const rooms = [
     {
-      key: 'schedule',
-      label: 'Bygg fritidsschema',
-      eyebrow: 'Nytt läsår / grundschema',
-      desc: 'Pussla eller skriv in fritidshemmets arbetspass, fredagsrull och bemanningsgrund.',
-      icon: Calendar,
+      key: 'personalSchedule',
+      label: 'Personligt schema',
+      eyebrow: 'Bygg en persons vecka',
+      desc: 'Lägg in arbetspass och uppdrag för en person i taget — dra block på en tidslinje precis som ett vanligt schema.',
+      icon: GraduationCap,
       tone: 'bg-[#D97757] text-white',
-      action: 'Öppna schemabygge',
+      action: 'Öppna personligt schema',
     },
     {
       key: 'tasks',
@@ -4764,7 +4852,7 @@ function HomeView({ staff, departments, assignments, driftState, fridayCycleWeek
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Välj rum</p>
             <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>Vad vill du göra nu?</h2>
             <p className="text-sm text-stone-600 mt-2">
-              SchemaFIX delar nu upp arbetet i tydliga rum. Fritidshemmets schemapussel ligger kvar tryggt i Schemabygge, medan Uppdrag, Drift och Skola får egna arbetsytor.
+              SchemaFIX delar nu upp arbetet i tydliga rum. Personligt schema, Uppdrag, Drift och Skola är egna arbetsytor — och Schemagenerator ligger under Verktyg när du vill pussla nytt.
             </p>
           </div>
           <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 px-4 py-3 min-w-[220px]">
@@ -4795,9 +4883,11 @@ function HomeView({ staff, departments, assignments, driftState, fridayCycleWeek
           <p className="text-xs uppercase tracking-wider text-stone-500 mb-3">Kom igång snabbt</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <QuickLink icon={Users} label="Lägg till eller justera personal" onClick={() => onOpenView('staff')} />
+            <QuickLink icon={Wand2} label="Generera schema (verktyg)" onClick={() => onOpenView('schedule')} />
             <QuickLink icon={Repeat} label="Öppna fredagsrullen" onClick={() => onOpenView('friday')} />
             <QuickLink icon={Clock} label="Se bemanningsregler" onClick={() => onOpenView('rules')} />
             <QuickLink icon={Upload} label="Öppna sparad JSON" onClick={onOpenFile} />
+            <QuickLink icon={Settings} label="Inställningar" onClick={() => onOpenView('settings')} />
           </div>
         </div>
 
@@ -5888,7 +5978,348 @@ function SchoolStep({ icon: Icon, title, text }) {
   );
 }
 
-// ==================== PERSONLIGT SCHEMA ====================
+// ==================== EXCEL-EXPORT (Personligt schema) ====================
+// Exporterar en persons hela vecka som en xlsx-fil. Layout per spec:
+// - 7 kolumner (A=tid, B-F=Måndag-Fredag, G=tid)
+// - Övre rader: namn, läsår, befattning, sysselsättningsgrad
+// - Shift- och arbetstidsrader
+// - Tidsgrid 06:00-18:00 i 15-minuters steg
+// - Aktiviteter fyller cellerna med typ-färg, första cellen visar etikett+tid
+// Färgerna kommer från getAssignmentColor() — samma palett som tidslinjen i appen.
+
+const PS_EXPORT_DAYS = [
+  { key: 'mon', label: 'Måndag', col: 1 },  // B
+  { key: 'tue', label: 'Tisdag', col: 2 },  // C
+  { key: 'wed', label: 'Onsdag', col: 3 },  // D
+  { key: 'thu', label: 'Torsdag', col: 4 }, // E
+  { key: 'fri', label: 'Fredag', col: 5 },  // F
+];
+const PS_EXPORT_START_MIN = 6 * 60;  // 06:00
+const PS_EXPORT_END_MIN = 18 * 60;   // 18:00
+const PS_EXPORT_STEP = 15;           // 15 min per rad
+
+function getCurrentSchoolYearLabel(now = new Date()) {
+  // I Sverige börjar läsåret i augusti. Före aug -> föreg-aktuell, från aug -> aktuell-nästa.
+  const year = now.getFullYear();
+  const month = now.getMonth(); // 0-11
+  const start = month >= 7 ? year : year - 1;
+  return `${start}-${start + 1}`;
+}
+
+function sanitizeForFilename(value) {
+  // Tar bort tecken som krånglar i filnamn på Windows/macOS och normaliserar mellanslag.
+  return String(value || '')
+    .replace(/[\\/:*?"<>|]/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    || 'Schema';
+}
+
+function hexToArgb(hex) {
+  // xlsx-js-style vill ha färger som ARGB (8 tecken hex utan #).
+  const clean = String(hex || '').replace('#', '').toUpperCase();
+  if (clean.length === 6) return 'FF' + clean;
+  if (clean.length === 8) return clean;
+  return 'FF6B7280'; // fallback grå
+}
+
+function getContrastColor(hex) {
+  // Räkna fram svart eller vit text utifrån bakgrundens luminans.
+  // Förenklat: medelvärde av RGB > 140 -> svart text, annars vit.
+  const clean = String(hex || '').replace('#', '');
+  if (clean.length < 6) return 'FF1C1917';
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+  return brightness > 150 ? 'FF1C1917' : 'FFFFFFFF';
+}
+
+function minutesToCellOffset(min) {
+  // Konvertera klockslag i minuter till radindex i tidsgriden (0-baserad inom griden).
+  return Math.round((min - PS_EXPORT_START_MIN) / PS_EXPORT_STEP);
+}
+
+function computeWorkMinutesForDay(shift) {
+  // Beräknad arbetstid per dag: passlängd minus 30 min rast om passet > 5 h.
+  // Matchar weeklyMinutes-logiken som används i resten av appen.
+  if (!shift || !shift[0] || !shift[1]) return 0;
+  const start = timeToMin(shift[0]);
+  const end = timeToMin(shift[1]);
+  if (start == null || end == null || end <= start) return 0;
+  const total = end - start;
+  return total > 300 ? total - 30 : total;
+}
+
+function exportPersonalScheduleToXlsx({ person, assignments, fridayOptions }) {
+  if (!person) { alert('Välj en person först.'); return; }
+  const XLSX = window.XLSX;
+  if (!XLSX) { alert('Excel-biblioteket kunde inte laddas. Kontrollera nätverksanslutningen och försök igen.'); return; }
+
+  // ----- Bygg dag-data: shift, uppdrag, arbetstid per dag -----
+  const dayData = PS_EXPORT_DAYS.map(d => {
+    const fridayOpt = d.key === 'fri'
+      ? { ...fridayOptions, fridayWeek: fridayOptions?.currentFridayWeek || 1 }
+      : { ...fridayOptions, fridayWeek: 1 };
+    const shift = getShiftForDay(person, d.key, fridayOpt);
+    const tasks = getAssignmentsForDay(assignments, person.id, d.key, fridayOpt);
+    return {
+      ...d,
+      shift,
+      tasks,
+      workMin: computeWorkMinutesForDay(shift),
+    };
+  });
+
+  // ----- Cellstilar -----
+  const thinBorder = { style: 'thin', color: { rgb: 'FFE7E5E4' } };
+  const borderAll = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
+  const headerStyle = {
+    font: { bold: true, sz: 14, color: { rgb: 'FF1C1917' } },
+    alignment: { vertical: 'center' },
+  };
+  const labelStyle = {
+    font: { bold: true, sz: 10, color: { rgb: 'FF57534E' } },
+    alignment: { vertical: 'center' },
+  };
+  const valueStyle = {
+    font: { sz: 11, color: { rgb: 'FF1C1917' } },
+    alignment: { vertical: 'center' },
+  };
+  const dayHeaderStyle = {
+    font: { bold: true, sz: 11, color: { rgb: 'FFFFFFFF' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FF44403C' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll,
+  };
+  const shiftRowStyle = {
+    font: { sz: 10, color: { rgb: 'FF1C1917' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFF5F5F4' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll,
+  };
+  const workRowStyle = {
+    font: { sz: 10, color: { rgb: 'FF1C1917' }, italic: true },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFFAFAF9' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll,
+  };
+  const timeAnchorStyle = {
+    font: { sz: 9, color: { rgb: 'FF78716C' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFFAFAF9' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll,
+  };
+  const timeAnchorHourStyle = {
+    font: { sz: 9, color: { rgb: 'FF1C1917' }, bold: true },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFF5F5F4' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll,
+  };
+  const emptyCellStyle = {
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFFFFFFF' } },
+    border: borderAll,
+  };
+
+  // ----- Bygg cell-matris -----
+  // SheetJS aoa_to_sheet vill ha rader som arrayer. Vi bygger upp celler manuellt
+  // (objekt {v, s, t}) för full kontroll över stilen.
+  const rows = []; // varje element: array av cellobjekt eller null
+
+  // Rad 1: Titel "Personligt schema" merged över A-G
+  rows.push([{ v: 'Personligt schema', s: headerStyle, t: 's' }, null, null, null, null, null, null]);
+  // Rad 2: Namn
+  rows.push([
+    { v: 'Namn', s: labelStyle, t: 's' },
+    { v: person.name || '', s: valueStyle, t: 's' },
+    null, null, null, null, null,
+  ]);
+  // Rad 3: Läsår
+  rows.push([
+    { v: 'Läsår', s: labelStyle, t: 's' },
+    { v: getCurrentSchoolYearLabel(), s: valueStyle, t: 's' },
+    null, null, null, null, null,
+  ]);
+  // Rad 4: Befattning
+  rows.push([
+    { v: 'Befattning', s: labelStyle, t: 's' },
+    { v: getStaffRoleLabel(person.employmentRole) || person.role || '', s: valueStyle, t: 's' },
+    null, null, null, null, null,
+  ]);
+  // Rad 5: Sysselsättningsgrad
+  const percent = (person.percent != null && person.percent !== '') ? `${person.percent} %` : '';
+  rows.push([
+    { v: 'Sysselsättningsgrad', s: labelStyle, t: 's' },
+    { v: percent, s: valueStyle, t: 's' },
+    null, null, null, null, null,
+  ]);
+  // Rad 6: tom
+  rows.push([null, null, null, null, null, null, null]);
+  // Rad 7: dag-rubriker
+  rows.push([
+    { v: '', s: emptyCellStyle, t: 's' },
+    ...PS_EXPORT_DAYS.map(d => ({ v: d.label, s: dayHeaderStyle, t: 's' })),
+    { v: '', s: emptyCellStyle, t: 's' },
+  ]);
+  // Rad 8: arbetspass per dag
+  rows.push([
+    { v: 'Arbetspass', s: labelStyle, t: 's' },
+    ...dayData.map(d => ({
+      v: d.shift ? `${d.shift[0]}–${d.shift[1]}` : 'Ledig',
+      s: shiftRowStyle,
+      t: 's',
+    })),
+    { v: 'Arbetspass', s: labelStyle, t: 's' },
+  ]);
+  // Rad 9: arbetstid per dag (beräknad)
+  rows.push([
+    { v: 'Arbetstid', s: labelStyle, t: 's' },
+    ...dayData.map(d => ({
+      v: d.workMin > 0 ? minToHM(d.workMin) : '',
+      s: workRowStyle,
+      t: 's',
+    })),
+    { v: 'Arbetstid', s: labelStyle, t: 's' },
+  ]);
+  // Rad 10: tom separator
+  rows.push([null, null, null, null, null, null, null]);
+
+  // ----- Tidsgrid -----
+  // Antal grid-rader: (PS_EXPORT_END_MIN - PS_EXPORT_START_MIN) / PS_EXPORT_STEP
+  const gridRowCount = (PS_EXPORT_END_MIN - PS_EXPORT_START_MIN) / PS_EXPORT_STEP;
+  const gridStartRowIndex = rows.length; // 0-baserat radindex i `rows`
+
+  // Steg 1: bygg tomma grid-rader med tid-ankare i A och G.
+  for (let i = 0; i < gridRowCount; i++) {
+    const min = PS_EXPORT_START_MIN + i * PS_EXPORT_STEP;
+    const isHour = (min % 60) === 0;
+    const timeLabel = minToTime(min);
+    const anchorStyle = isHour ? timeAnchorHourStyle : timeAnchorStyle;
+    rows.push([
+      { v: isHour ? timeLabel : '', s: anchorStyle, t: 's' },
+      { v: '', s: emptyCellStyle, t: 's' },
+      { v: '', s: emptyCellStyle, t: 's' },
+      { v: '', s: emptyCellStyle, t: 's' },
+      { v: '', s: emptyCellStyle, t: 's' },
+      { v: '', s: emptyCellStyle, t: 's' },
+      { v: isHour ? timeLabel : '', s: anchorStyle, t: 's' },
+    ]);
+  }
+
+  // Steg 2: lägg ut aktiviteter i sina respektive dag-kolumner.
+  // Spara merge-info för att slå ihop celler för varje aktivitet.
+  const merges = [];
+  // A1:G1 - rubrik
+  merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } });
+
+  for (const day of dayData) {
+    for (const task of day.tasks) {
+      if (!task || task.start == null || task.end == null) continue;
+      // Klipp av aktiviteter som ligger utanför 06-18.
+      const start = Math.max(PS_EXPORT_START_MIN, task.start);
+      const end = Math.min(PS_EXPORT_END_MIN, task.end);
+      if (end <= start) continue;
+      const startOffset = minutesToCellOffset(start);
+      const endOffset = minutesToCellOffset(end);
+      const rowStart = gridStartRowIndex + startOffset;
+      const rowEnd = gridStartRowIndex + endOffset - 1;
+      if (rowEnd < rowStart) continue;
+      const meta = getAssignmentTypeMeta(task.type);
+      const color = getAssignmentColor(task.type); // använder eventuell override från wizard
+      const argb = hexToArgb(color);
+      const textArgb = getContrastColor(color);
+      const label = task.label || meta.label;
+      const timeRange = `${minToTime(task.start)}–${minToTime(task.end)}`;
+      const cellText = `${label}\n${timeRange}`;
+      // Fyll alla celler i blocket med färgen.
+      for (let r = rowStart; r <= rowEnd; r++) {
+        // Säkerställ att row finns i rows[]
+        if (!rows[r]) {
+          rows[r] = [null, null, null, null, null, null, null];
+        }
+        const cell = {
+          v: r === rowStart ? cellText : '',
+          s: {
+            fill: { patternType: 'solid', fgColor: { rgb: argb } },
+            font: { sz: 10, bold: true, color: { rgb: textArgb } },
+            alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+            border: borderAll,
+          },
+          t: 's',
+        };
+        rows[r][day.col] = cell;
+      }
+      // Merga celler i blocket om det spänner flera rader.
+      if (rowEnd > rowStart) {
+        merges.push({ s: { r: rowStart, c: day.col }, e: { r: rowEnd, c: day.col } });
+      }
+    }
+  }
+
+  // ----- Skapa sheet -----
+  // Konvertera till AOA-formen som SheetJS förstår.
+  const aoa = rows.map(row => row.map(cell => (cell ? cell.v : null)));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Lägg på cellstilar genom att stoppa hela cell-objekten i ws.
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r] || [];
+    for (let c = 0; c < 7; c++) {
+      const cell = row[c];
+      if (!cell) continue;
+      const addr = XLSX.utils.encode_cell({ r, c });
+      ws[addr] = { v: cell.v, s: cell.s, t: cell.t || 's' };
+    }
+  }
+
+  // Sätt kolumnbredder. A och G smala (tid), B-F bredare.
+  ws['!cols'] = [
+    { wch: 7 },  // A: tid
+    { wch: 22 }, // B-F: dag
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 7 },  // G: tid
+  ];
+
+  // Sätt radhöjder. Header-rader normala, grid-rader lite kompaktare.
+  ws['!rows'] = [];
+  ws['!rows'][0] = { hpt: 24 };          // titel
+  for (let r = 1; r <= 4; r++) ws['!rows'][r] = { hpt: 18 }; // metafält
+  ws['!rows'][6] = { hpt: 22 };          // dag-rubriker
+  for (let r = 7; r <= 8; r++) ws['!rows'][r] = { hpt: 18 }; // shift/arbetstid
+  // Grid-rader: 15 punkter (kompakt)
+  for (let i = 0; i < gridRowCount; i++) {
+    ws['!rows'][gridStartRowIndex + i] = { hpt: 15 };
+  }
+
+  // Merges
+  ws['!merges'] = merges;
+
+  // Skapa workbook och spara.
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Personligt schema');
+
+  // Filnamn enligt spec: {Förnamn}_{Efternamn}_Personligt_Schema_{år}-{år}.xlsx
+  const nameParts = String(person.name || 'Person').trim().split(/\s+/);
+  const firstName = sanitizeForFilename(nameParts[0] || 'Person');
+  const lastName = sanitizeForFilename(nameParts.slice(1).join(' ') || '');
+  const yearLabel = getCurrentSchoolYearLabel();
+  const filename = lastName
+    ? `${firstName}_${lastName}_Personligt_Schema_${yearLabel}.xlsx`
+    : `${firstName}_Personligt_Schema_${yearLabel}.xlsx`;
+
+  try {
+    XLSX.writeFile(wb, filename);
+  } catch (err) {
+    console.error('Kunde inte skriva Excel-fil:', err);
+    alert('Kunde inte exportera till Excel. Försök igen, eller kontrollera webbläsarens nedladdningsinställningar.');
+  }
+}
+
+
 // Personcentrerad veckovy. Visar EN persons EN dag som ett tidsschema där
 // uppdrag är draggbara block. Återanvänder samma assignments-datastruktur
 // som Uppdrag-fliken och Skola-fliken – ingen separat data, allt syns i Drift.
@@ -5909,6 +6340,10 @@ function PersonalScheduleView({
   const [selectedPersonId, setSelectedPersonId] = useState('');
   const [activeDay, setActiveDay] = useState('mon');
   const [roleFilter, setRoleFilter] = useState('all');
+  // Färgwizard — visas första gången vyn öppnas (innan något block är dragit).
+  // getColorWizardSeen() pekar mot localStorage, så samma användare ser den bara
+  // en gång. Användaren kan starta om wizarden via knapp i toppen av vyn.
+  const [showColorWizard, setShowColorWizard] = useState(() => !getColorWizardSeen());
   const timelineRef = useRef(null);
   const dragPreviewRef = useRef(null);
   const [dragPreview, setDragPreview] = useState(null);
@@ -6051,9 +6486,36 @@ function PersonalScheduleView({
 
   return (
     <div className="space-y-6">
+      {showColorWizard && (
+        <ColorWizardModal onClose={() => setShowColorWizard(false)} />
+      )}
       <TabIntro>
         Bygg en persons vecka som ett tidsschema — dra block för att flytta, dra i kanterna för att korta eller förlänga. Allt sparas som vanliga uppdrag och syns automatiskt i Drift om personen blir frånvarande.
       </TabIntro>
+
+      <div className="flex items-center justify-end gap-3 flex-wrap -mt-3">
+        <button
+          type="button"
+          onClick={() => setShowColorWizard(true)}
+          className="text-xs text-stone-600 hover:text-stone-900 underline inline-flex items-center gap-1.5"
+          title="Öppna färgwizarden för att justera paletten"
+        >
+          <Sparkles size={12} />Justera färger
+        </button>
+        <button
+          type="button"
+          onClick={() => exportPersonalScheduleToXlsx({
+            person,
+            assignments,
+            fridayOptions: { cycleWeeks: fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek },
+          })}
+          disabled={!person}
+          className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition ring-1 ${person ? 'bg-white text-stone-700 ring-stone-200 hover:bg-stone-50' : 'bg-stone-100 text-stone-400 ring-stone-200 cursor-not-allowed'}`}
+          title={person ? `Exportera ${person.name}s vecka till Excel` : 'Välj en person först'}
+        >
+          <FileSpreadsheet size={14} />Exportera till Excel
+        </button>
+      </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[0.85fr,1.15fr] gap-4">
         {/* Vänster: person + dag-väljare */}
@@ -6841,7 +7303,85 @@ function FeasibilityPanel({ issues, onGoToRules }) {
   );
 }
 
+function GeneratorPrerequisitesBanner({ staffCount, passBankCount, coverageCount, onOpenView, onGenerate, generating }) {
+  // Tre förutsättningar för att Schemagenerator ska kunna pussla något vettigt.
+  // Visa allt i en banner ovanför listan så användaren ser status och kan klicka
+  // sig direkt till rätt flik. När alla tre är OK aktiveras Generera-knappen.
+  const checks = [
+    {
+      key: 'staff',
+      ok: staffCount > 0,
+      okLabel: `Personal tillagd (${staffCount} ${staffCount === 1 ? 'person' : 'personer'})`,
+      missingLabel: 'Ingen personal är tillagd ännu',
+      action: 'Gå till Personal',
+      view: 'staff',
+    },
+    {
+      key: 'coverage',
+      ok: coverageCount > 0,
+      okLabel: `Bemanningskrav satta (${coverageCount} ${coverageCount === 1 ? 'regel' : 'regler'})`,
+      missingLabel: 'Bemanningskrav saknas',
+      action: 'Gå till Bemanning',
+      view: 'rules',
+    },
+    {
+      key: 'passbank',
+      ok: passBankCount > 0,
+      okLabel: `Passbank ifylld (${passBankCount} ${passBankCount === 1 ? 'pass' : 'pass'})`,
+      missingLabel: 'Passbanken är tom',
+      action: 'Gå till Passbank',
+      view: 'passbank',
+    },
+  ];
+  const allOk = checks.every(c => c.ok);
+  return (
+    <div className={`rounded-2xl ring-1 p-4 ${allOk ? 'bg-emerald-50/60 ring-emerald-200' : 'bg-amber-50/60 ring-amber-200'}`}>
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
+        <div className="min-w-0">
+          <p className="text-[10px] uppercase tracking-wider text-stone-500">Förutsättningar för att generera</p>
+          <h3 className="display-font text-lg text-stone-800 mt-0.5">
+            {allOk ? 'Allt på plats — du kan generera schemaförslag.' : 'Fyll i grunderna innan du genererar.'}
+          </h3>
+        </div>
+        {onGenerate && (
+          <button
+            type="button"
+            onClick={onGenerate}
+            disabled={!allOk || generating}
+            title={allOk ? 'Pussla fram tre schemaförslag' : 'Fyll i alla tre förutsättningar först'}
+            className={`px-4 py-2 rounded-full text-sm flex items-center gap-2 transition shrink-0 ${(!allOk || generating) ? 'bg-stone-200 text-stone-500 cursor-not-allowed' : 'bg-stone-800 text-white hover:bg-stone-900'}`}
+          >
+            <Wand2 size={14} />{generating ? 'Räknar...' : 'Generera'}
+          </button>
+        )}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        {checks.map(c => (
+          <div key={c.key} className={`rounded-xl bg-white ring-1 px-3 py-2 flex items-center gap-2 ${c.ok ? 'ring-emerald-200' : 'ring-amber-200'}`}>
+            {c.ok
+              ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+              : <AlertCircle size={16} className="text-amber-600 shrink-0" />}
+            <span className={`flex-1 min-w-0 text-sm ${c.ok ? 'text-stone-700' : 'text-stone-800'}`} style={{ fontWeight: c.ok ? 400 : 500 }}>
+              {c.ok ? c.okLabel : c.missingLabel}
+            </span>
+            {!c.ok && (
+              <button
+                type="button"
+                onClick={() => onOpenView?.(c.view)}
+                className="text-xs text-stone-700 hover:text-stone-900 underline shrink-0"
+              >
+                {c.action}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, onGoToStaff, onLoadExample, departments, passBank,
+                        coverageBlocks = [], onOpenView, onGenerate, generating = false,
                         fridayCycleWeeks, currentFridayWeek, setCurrentFridayWeek, hasFridaySetup,
                         fridayTemplateRotation = [], onUpdateShift,
                         baselineStaff = null, onResetShift, onResetAll }) {
@@ -7028,8 +7568,16 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
   return (
     <div className="space-y-4">
       <TabIntro>
-        Här ser du schemat per dag och hur bemanningen ser ut över tiden. Du kan antingen låta generatorn pussla fram förslag eller <strong>klicka på en stapel och skriva in tider manuellt</strong> om du redan har ett schema. Veckotimmarna räknas om medan du skriver, och manuella ändringar markeras så du kan ångra dem. Växla mellan gemensam bemanning och avdelningar för att se varje del av fritids. Om något inte går ihop visas brist- och övermaxlistor här. Knappen uppe till höger skriver ut hela veckan som PDF.
+        Schemagenerator — pussla fram ett grundschema utifrån personal, passbank och bemanningskrav. När du har ett förslag (eller har skrivit in tider manuellt) ser du veckan per dag här. Klicka på en stapel för att redigera, växla mellan gemensam bemanning och avdelningar, och skriv ut hela veckan som PDF via knappen uppe till höger.
       </TabIntro>
+      <GeneratorPrerequisitesBanner
+        staffCount={staffCount}
+        passBankCount={Array.isArray(passBank) ? passBank.length : 0}
+        coverageCount={Array.isArray(coverageBlocks) ? coverageBlocks.length : 0}
+        onOpenView={onOpenView}
+        onGenerate={onGenerate}
+        generating={generating}
+      />
       <div className="sticky top-[72px] z-20 -mx-2 rounded-2xl bg-[#FBF8F4]/95 px-2 py-2 shadow-sm ring-1 ring-stone-200/70 backdrop-blur">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex gap-2 flex-wrap">
@@ -10565,6 +11113,166 @@ function PbStat({ label, value, sub }) {
   );
 }
 
+// -------- Färgwizard & färginställningar --------
+// Wizard som visas första gången Personligt schema öppnas, plus en motsvarande
+// editor-sektion i Inställningar. Båda muterar samma localStorage-nyckel via
+// saveAssignmentColorOverridesToStorage så paletten håller sig synkad mellan
+// tidslinjen och Excel-exporten.
+
+function buildInitialColorDraft() {
+  // Bygg ett komplett utkast (alla typer) genom att lägga ev. override ovanpå default.
+  const draft = {};
+  for (const type of ASSIGNMENT_TYPES) {
+    draft[type.id] = getAssignmentColor(type.id);
+  }
+  return draft;
+}
+
+function ColorPickerGrid({ draft, setDraft }) {
+  // Två kolumner med en färg-input + label per typ. Återanvänds av både wizard och Inställningar.
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      {ASSIGNMENT_TYPES.map(type => {
+        const current = draft[type.id] || type.color;
+        const isDefault = String(current).toLowerCase() === String(type.color).toLowerCase();
+        return (
+          <div key={type.id} className="flex items-center gap-3 px-3 py-2 rounded-xl bg-white ring-1 ring-stone-200">
+            <input
+              type="color"
+              className="w-9 h-9 rounded cursor-pointer border-0 p-0 shrink-0"
+              value={current}
+              onChange={(e) => setDraft({ ...draft, [type.id]: e.target.value })}
+              aria-label={`Färg för ${type.label}`}
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-stone-800 truncate" style={{ fontWeight: 500 }}>{type.label}</p>
+              <p className="text-[10px] text-stone-500 tabular-nums">{String(current).toLowerCase()} {isDefault && <span className="text-stone-400">· standard</span>}</p>
+            </div>
+            {!isDefault && (
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, [type.id]: type.color })}
+                className="text-[10px] text-stone-500 hover:text-stone-800 underline shrink-0"
+                title="Återställ till standardfärg"
+              >
+                Återställ
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ColorWizardModal({ onClose }) {
+  const [draft, setDraft] = useState(() => buildInitialColorDraft());
+  const handleSave = () => {
+    saveAssignmentColorOverridesToStorage(draft);
+    setColorWizardSeen();
+    onClose?.();
+  };
+  const handleSkip = () => {
+    // Användaren vill bara börja jobba — markera som sedd men spara ingen ändring.
+    setColorWizardSeen();
+    onClose?.();
+  };
+  const handleResetAll = () => {
+    const fresh = {};
+    for (const type of ASSIGNMENT_TYPES) fresh[type.id] = type.color;
+    setDraft(fresh);
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28, 25, 23, 0.5)' }}>
+      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden">
+        <div className="px-6 py-5 border-b border-stone-200">
+          <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Personligt schema</p>
+          <h2 className="display-font text-2xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>Välj färger för era uppdragstyper</h2>
+          <p className="text-sm text-stone-600 mt-2">Färgerna används både i tidslinjen när du bygger schemat och i Excel-exporten — samma palett båda ställen. Standardfärgerna är förifyllda, du kan ändra senare i <strong>Inställningar</strong>.</p>
+        </div>
+        <div className="px-6 py-5 overflow-y-auto flex-1">
+          <ColorPickerGrid draft={draft} setDraft={setDraft} />
+        </div>
+        <div className="px-6 py-4 border-t border-stone-200 bg-stone-50 flex gap-2 justify-between flex-wrap">
+          <button onClick={handleResetAll}
+            className="px-3 py-2 text-sm rounded-lg text-stone-600 hover:bg-stone-100 transition">
+            Återställ alla till standard
+          </button>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={handleSkip}
+              className="px-4 py-2 text-sm rounded-lg text-stone-600 hover:bg-stone-100 transition">
+              Hoppa över
+            </button>
+            <button onClick={handleSave}
+              className="px-5 py-2 text-sm rounded-lg bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2">
+              Spara färger <ArrowRight size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AssignmentTypeColorsSection() {
+  // Settings-sektion — egen lokal state så användaren kan ångra innan spar.
+  const [draft, setDraft] = useState(() => buildInitialColorDraft());
+  const [savedAt, setSavedAt] = useState(0);
+  const isDirty = useMemo(
+    () => ASSIGNMENT_TYPE_IDS.some(id => String(draft[id] || '').toLowerCase() !== String(getAssignmentColor(id)).toLowerCase()),
+    [draft, savedAt]
+  );
+  const hasAnyOverride = useMemo(
+    () => ASSIGNMENT_TYPE_IDS.some(id => String(getAssignmentColor(id)).toLowerCase() !== String(ASSIGNMENT_DEFAULT_COLORS[id]).toLowerCase()),
+    [savedAt]
+  );
+  const handleSave = () => {
+    saveAssignmentColorOverridesToStorage(draft);
+    setSavedAt(Date.now());
+  };
+  const handleResetAllDefaults = () => {
+    const fresh = {};
+    for (const type of ASSIGNMENT_TYPES) fresh[type.id] = type.color;
+    setDraft(fresh);
+  };
+  const handleRevertChanges = () => {
+    setDraft(buildInitialColorDraft());
+  };
+  return (
+    <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-5">
+      <div className="flex items-start justify-between mb-4 gap-4 flex-wrap">
+        <div>
+          <h2 className="display-font text-xl text-stone-800">Färger för uppdragstyper</h2>
+          <p className="text-sm text-stone-500 mt-0.5 max-w-2xl">
+            Samma palett används i Personligt schema (tidslinjen) och i Excel-exporten. Färgerna sparas lokalt i webbläsaren. Du sätter färg per <em>typ</em> — inte per specifik etikett — så att t.ex. alla resurspass får samma färg oavsett vad du kallar dem.
+          </p>
+        </div>
+      </div>
+      <ColorPickerGrid draft={draft} setDraft={setDraft} />
+      <div className="mt-4 flex gap-2 justify-between flex-wrap">
+        <button onClick={handleResetAllDefaults}
+          disabled={!hasAnyOverride && !isDirty}
+          className="px-3 py-2 text-sm rounded-lg text-stone-600 hover:bg-stone-100 transition disabled:opacity-40 disabled:cursor-not-allowed">
+          Återställ alla till standard
+        </button>
+        <div className="flex gap-2 flex-wrap">
+          {isDirty && (
+            <button onClick={handleRevertChanges}
+              className="px-3 py-2 text-sm rounded-lg text-stone-600 hover:bg-stone-100 transition">
+              Ångra ändringar
+            </button>
+          )}
+          <button onClick={handleSave}
+            disabled={!isDirty}
+            className={`px-4 py-2 text-sm rounded-lg flex items-center gap-2 transition ${isDirty ? 'bg-stone-800 text-white hover:bg-stone-900' : 'bg-stone-200 text-stone-500 cursor-not-allowed'}`}>
+            Spara färger
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // -------- Settings View (departments etc.) --------
 
 function SettingsView({ departments, setDepartments, staff, setStaff, coverageBlocks, setCoverageBlocks,
@@ -10705,6 +11413,11 @@ function SettingsView({ departments, setDepartments, staff, setStaff, coverageBl
           </div>
         )}
       </div>
+      )}
+
+      {/* Färger för uppdragstyper */}
+      {(mode === 'all' || mode === 'settings') && (
+      <AssignmentTypeColorsSection />
       )}
 
       {(mode === 'all' || mode === 'passbank') && (
@@ -12167,6 +12880,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v91',
+      title: 'Verktyg, färgwizard och Excel-export',
+      body: 'Schemagenerator har flyttat till en ny grupp "Verktyg" i sidopanelen — kraftfull men sällan använd. Första gången du öppnar Personligt schema får du välja färger för era uppdragstyper; samma palett används både i tidslinjen och i Excel-exporten av personliga scheman.',
+    },
     {
       version: 'v90',
       title: 'Personligt schema',
