@@ -549,6 +549,51 @@ function getAssignmentTypeMeta(typeId) {
   return ASSIGNMENT_TYPES.find(type => type.id === typeId) || ASSIGNMENT_TYPES[ASSIGNMENT_TYPES.length - 1];
 }
 
+const SCHOOL_TASK_ROLE_OPTIONS = [
+  { id: 'owner', label: 'Ansvarig', short: 'ansv.', borderStyle: 'solid' },
+  { id: 'resource', label: 'Resurs', short: 'resurs', borderStyle: 'dashed' },
+  { id: 'support', label: 'Stöd', short: 'stöd', borderStyle: 'dotted' },
+];
+function normalizeSchoolTaskRole(value) {
+  const raw = String(value || '').trim();
+  return SCHOOL_TASK_ROLE_OPTIONS.some(option => option.id === raw) ? raw : 'owner';
+}
+function getSchoolTaskRoleMeta(value) {
+  return SCHOOL_TASK_ROLE_OPTIONS.find(option => option.id === normalizeSchoolTaskRole(value)) || SCHOOL_TASK_ROLE_OPTIONS[0];
+}
+function getSubjectColorFromLabel(label, fallbackColor = '#7c3aed') {
+  const text = String(label || '').toLowerCase();
+  if (text.includes('textilslöjd') || text.includes('textilslojd')) return '#be185d';
+  if (text.includes('träslöjd') || text.includes('traslojd')) return '#92400e';
+  if (text.includes('slöjd') || text.includes('slojd')) return '#a16207';
+  if (text.includes('idrott')) return '#16a34a';
+  if (text.includes('bild')) return '#db2777';
+  if (text.includes('musik')) return '#9333ea';
+  if (/\bsv\b|svenska/.test(text)) return '#7c3aed';
+  if (/\bma\b|matte|matematik/.test(text)) return '#2563eb';
+  if (/\beng\b|engelska/.test(text)) return '#0891b2';
+  if (/\bno\b/.test(text)) return '#d946ef';
+  if (/\bso\b/.test(text)) return '#ea580c';
+  return fallbackColor;
+}
+function getSchoolTaskVisual(task) {
+  const meta = getAssignmentTypeMeta(task?.type);
+  const role = getSchoolTaskRoleMeta(task?.schoolRole);
+  const color = task?.type === 'lesson'
+    ? getSubjectColorFromLabel(task?.label || task?.target || meta.label, meta.color)
+    : meta.color;
+  return {
+    color,
+    backgroundColor: `${color}26`,
+    strongBackgroundColor: `${color}34`,
+    softBackgroundColor: `${color}18`,
+    borderColor: color,
+    borderStyle: role.borderStyle,
+    textColor: '#1C1917',
+    role,
+  };
+}
+
 function createAssignmentId() {
   return `asg-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
 }
@@ -575,6 +620,9 @@ function defaultBreakFlexibility(typeId) {
 function assignmentReleaseDefault(typeId, breakFlexibility = defaultBreakFlexibility(typeId)) {
   if (assignmentIsBreakType(typeId)) return breakFlexibility === 'flexible';
   return assignmentCanReleaseByDefault(typeId);
+}
+function assignmentSupportsSchoolRole(typeId) {
+  return ['lesson', 'studySupport', 'yard', 'break', 'pedLunch', 'meeting', 'collab', 'resource', 'prep', 'planning'].includes(typeId);
 }
 function assignmentIsBoundaryType(typeId) {
   return ['opening', 'closing'].includes(typeId);
@@ -1284,6 +1332,7 @@ function normalizeAssignment(item, options = {}) {
     releaseForCover: item.releaseForCover == null ? assignmentReleaseDefault(type, breakFlexibility) : !!item.releaseForCover,
     breakFlexibility,
     breakRuleException: assignmentIsBreakType(type) ? !!item.breakRuleException : false,
+    schoolRole: normalizeSchoolTaskRole(item.schoolRole),
   };
 }
 function sortAssignments(list = []) {
@@ -3395,7 +3444,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 27,
+    version: 37,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3596,6 +3645,45 @@ function FritidsSchemaApp() {
       });
       if (!nextTask) return prev;
       return replaceAssignmentsForDay(prev, target.id, dayKey, [...current, nextTask], staff, fridayOptions);
+    });
+    return true;
+  };
+  const deleteSchoolPosition = ({ personId, dayKey, taskId }) => {
+    const target = staff.find(member => String(member.id) === String(personId));
+    if (!target || !ALL_DAY_KEYS.includes(dayKey) || !taskId) return false;
+    const fridayOptions = {
+      fridayWeek: dayKey === 'fri' ? currentFridayWeek : 1,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    };
+    setAssignments(prev => {
+      const current = getAssignmentsForDay(prev, target.id, dayKey, fridayOptions);
+      const nextList = current.filter(task => String(task.id) !== String(taskId));
+      if (nextList.length === current.length) return prev;
+      return replaceAssignmentsForDay(prev, target.id, dayKey, nextList, staff, fridayOptions);
+    });
+    return true;
+  };
+  const updateSchoolPosition = ({ personId, dayKey, taskId, patch }) => {
+    const target = staff.find(member => String(member.id) === String(personId));
+    if (!target || !ALL_DAY_KEYS.includes(dayKey) || !taskId || !patch || typeof patch !== 'object') return false;
+    const fridayOptions = {
+      fridayWeek: dayKey === 'fri' ? currentFridayWeek : 1,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    };
+    const shift = getShiftForDay(target, dayKey, fridayOptions);
+    if (!shift) return false;
+    setAssignments(prev => {
+      const current = getAssignmentsForDay(prev, target.id, dayKey, fridayOptions);
+      let didUpdate = false;
+      const nextList = current.map(task => {
+        if (String(task.id) !== String(taskId)) return task;
+        didUpdate = true;
+        return { ...task, ...patch };
+      });
+      if (!didUpdate) return prev;
+      return replaceAssignmentsForDay(prev, target.id, dayKey, nextList, staff, fridayOptions);
     });
     return true;
   };
@@ -3992,7 +4080,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v79</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v89</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4106,6 +4194,8 @@ function FritidsSchemaApp() {
               onOpenAssignmentEditor={openAssignmentEditor}
               onOpenTasksDay={(dayKey) => { setAssignmentDay(dayKey); setView('tasks'); }}
               onAddSchoolPosition={addSchoolPosition}
+              onDeleteSchoolPosition={deleteSchoolPosition}
+              onUpdateSchoolPosition={updateSchoolPosition}
             />}
             {(view === 'schedule' || view === 'drift') && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -4737,12 +4827,15 @@ function QuickLink({ icon: Icon, label, onClick }) {
   );
 }
 
-function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, onOpenView, onOpenAssignmentEditor, onOpenTasksDay, onAddSchoolPosition }) {
+function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, onOpenView, onOpenAssignmentEditor, onOpenTasksDay, onAddSchoolPosition, onDeleteSchoolPosition, onUpdateSchoolPosition }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [activeDay, setActiveDay] = useState('mon');
   const [personFilter, setPersonFilter] = useState('all');
   const [roleFilter, setRoleFilter] = useState('school');
   const [query, setQuery] = useState('');
+  const timelineRef = useRef(null);
+  const dragPreviewRef = useRef(null);
+  const [dragPreview, setDragPreview] = useState(null);
   const [quickPosition, setQuickPosition] = useState({
     personId: '',
     type: 'lesson',
@@ -4752,9 +4845,16 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
     label: '',
     mustCover: true,
     releaseForCover: false,
+    schoolRole: 'owner',
   });
   const [quickError, setQuickError] = useState('');
-  const schoolTypes = new Set(['lesson', 'studySupport', 'yard', 'pedLunch', 'meeting', 'collab', 'resource']);
+  const schoolDays = DAY_META;
+  const deleteSchoolTask = (personId, dayKey, task) => {
+    if (!personId || !task?.id) return;
+    if (!confirm(`Ta bort "${task.label || inferAssignmentLabel(task.type)}" från ${getDayMeta(dayKey).label.toLowerCase()}?`)) return;
+    onDeleteSchoolPosition?.({ personId, dayKey, taskId: task.id });
+  };
+  const schoolTypes = new Set(['lesson', 'studySupport', 'yard', 'break', 'pedLunch', 'meeting', 'collab', 'resource', 'prep', 'planning']);
   const isSchoolTask = (person, task) => {
     const searchable = `${person.name || ''} ${person.role || ''} ${task.label || ''} ${task.target || ''} ${task.notes || ''} ${getAssignmentTypeMeta(task.type).label}`.toLowerCase();
     const targetLooksSchool = /f-?1|2-?3|klass|grupp|ar|ars|skola|lektion|studiest|studiestod|undervisning/.test(searchable);
@@ -4791,7 +4891,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
   }, [peopleToShow, assignments, activeDay, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation, personFilter, query]);
   const weeklySchoolRows = useMemo(() => {
     return peopleToShow.map(person => {
-      const days = DAYS.map(day => {
+      const days = schoolDays.map(day => {
         const shift = getShiftForDay(person, day.key, {
           fridayWeek: day.key === 'fri' ? currentFridayWeek : 1,
           cycleWeeks: fridayCycleWeeks,
@@ -4816,7 +4916,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
   }, [peopleToShow, assignments, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]);
   const schoolPositionCount = useMemo(() => {
     let count = 0;
-    DAYS.forEach(day => {
+    schoolDays.forEach(day => {
       staff.forEach(person => {
         getAssignmentsForDay(assignments, person.id, day.key, {
           fridayWeek: day.key === 'fri' ? currentFridayWeek : 1,
@@ -4830,7 +4930,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
     return count;
   }, [staff, assignments, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]);
   const activeDayLabel = getDayMeta(activeDay).label;
-  const schoolQuickTypes = ['lesson', 'studySupport', 'yard', 'pedLunch', 'meeting', 'collab', 'resource'];
+  const schoolQuickTypes = ['lesson', 'studySupport', 'yard', 'break', 'pedLunch', 'meeting', 'collab', 'resource', 'prep', 'planning'];
   const quickPerson = staff.find(person => String(person.id) === String(quickPosition.personId));
   const quickStartMin = parseFlexibleTimeInput(quickPosition.start);
   const quickEndMin = parseFlexibleTimeInput(quickPosition.end);
@@ -4840,16 +4940,46 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
     cycleWeeks: fridayCycleWeeks,
     fridayTemplateRotation,
   }) : null;
-  const builderTasks = builderPerson ? getAssignmentsForDay(assignments, builderPerson.id, activeDay, {
+  const builderAllTasks = builderPerson ? getAssignmentsForDay(assignments, builderPerson.id, activeDay, {
     fridayWeek: activeDay === 'fri' ? currentFridayWeek : 1,
     cycleWeeks: fridayCycleWeeks,
     fridayTemplateRotation,
   })
-    .filter(task => isSchoolTask(builderPerson, task))
     .sort((a, b) => a.start - b.start) : [];
+  const builderTasks = builderAllTasks.filter(task => isSchoolTask(builderPerson, task));
+  const getBuilderTaskCollisionCount = (task, start = task?.start, end = task?.end) => {
+    if (!task || start == null || end == null) return 0;
+    return builderTasks.filter(other =>
+      String(other.id) !== String(task.id)
+      && intervalsOverlap(start, end, other.start, other.end)
+    ).length;
+  };
+  const lessonQuickBlocks = [
+    { id: 'sv-40', label: 'sv 40', title: 'sv', duration: 40 },
+    { id: 'sv-60', label: 'sv 60', title: 'sv', duration: 60 },
+    { id: 'ma-40', label: 'ma 40', title: 'ma', duration: 40 },
+    { id: 'ma-60', label: 'ma 60', title: 'ma', duration: 60 },
+    { id: 'eng-40', label: 'eng 40', title: 'eng', duration: 40 },
+    { id: 'eng-60', label: 'eng 60', title: 'eng', duration: 60 },
+    { id: 'no-40', label: 'no 40', title: 'no', duration: 40 },
+    { id: 'no-60', label: 'no 60', title: 'no', duration: 60 },
+    { id: 'so-40', label: 'so 40', title: 'so', duration: 40 },
+    { id: 'so-60', label: 'so 60', title: 'so', duration: 60 },
+    { id: 'traslojd-40', label: 'träslöjd 40', title: 'träslöjd', duration: 40 },
+    { id: 'traslojd-60', label: 'träslöjd 60', title: 'träslöjd', duration: 60 },
+    { id: 'textilslojd-40', label: 'textilslöjd 40', title: 'textilslöjd', duration: 40 },
+    { id: 'textilslojd-60', label: 'textilslöjd 60', title: 'textilslöjd', duration: 60 },
+    { id: 'idrott-40', label: 'idrott 40', title: 'idrott', duration: 40 },
+    { id: 'idrott-60', label: 'idrott 60', title: 'idrott', duration: 60 },
+    { id: 'bild-40', label: 'bild 40', title: 'bild', duration: 40 },
+    { id: 'bild-60', label: 'bild 60', title: 'bild', duration: 60 },
+    { id: 'musik-40', label: 'musik 40', title: 'musik', duration: 40 },
+    { id: 'musik-60', label: 'musik 60', title: 'musik', duration: 60 },
+  ];
   const timelineStart = 7 * 60;
   const timelineEnd = 17 * 60;
   const timelineSpan = timelineEnd - timelineStart;
+  const timelineStep = 5;
   const toTimelineStyle = (start, end) => {
     const safeStart = Math.max(timelineStart, Math.min(timelineEnd - 10, start ?? timelineStart));
     const safeEnd = Math.max(safeStart + 10, Math.min(timelineEnd, end ?? safeStart + 10));
@@ -4858,8 +4988,165 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
       width: `${Math.max(5, ((safeEnd - safeStart) / timelineSpan) * 100)}%`,
     };
   };
+  const getPointerMinute = (clientX) => {
+    const rect = timelineRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return timelineStart;
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return roundToStep(timelineStart + ratio * timelineSpan, timelineStep);
+  };
+  const startSchoolTaskDrag = (event, task, mode = 'move') => {
+    if (!builderPerson || !builderShift || !task?.id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget?.setPointerCapture && event.pointerId != null) {
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+    }
+    const shiftStart = timeToMin(builderShift[0]);
+    const shiftEnd = timeToMin(builderShift[1]);
+    const nextPreview = {
+      personId: String(builderPerson.id),
+      dayKey: activeDay,
+      taskId: task.id,
+      mode,
+      originMinute: getPointerMinute(event.clientX),
+      start: task.start,
+      end: task.end,
+      previewStart: task.start,
+      previewEnd: task.end,
+      shiftStart,
+      shiftEnd,
+    };
+    dragPreviewRef.current = nextPreview;
+    setDragPreview(nextPreview);
+  };
+  useEffect(() => {
+    if (!dragPreview) return;
+    const updatePreview = (event) => {
+      const currentMinute = getPointerMinute(event.clientX);
+      const delta = roundToStep(currentMinute - dragPreview.originMinute, timelineStep);
+      const minDuration = timelineStep;
+      let nextStart = dragPreview.start;
+      let nextEnd = dragPreview.end;
+      if (dragPreview.mode === 'start') {
+        const maxStart = Math.max(dragPreview.shiftStart, dragPreview.end - minDuration);
+        nextStart = clamp(roundToStep(dragPreview.start + delta, timelineStep), dragPreview.shiftStart, maxStart);
+      } else if (dragPreview.mode === 'end') {
+        const minEnd = Math.min(dragPreview.shiftEnd, dragPreview.start + minDuration);
+        nextEnd = clamp(roundToStep(dragPreview.end + delta, timelineStep), minEnd, dragPreview.shiftEnd);
+      } else {
+        const duration = Math.max(minDuration, dragPreview.end - dragPreview.start);
+        const maxStart = Math.max(dragPreview.shiftStart, dragPreview.shiftEnd - duration);
+        nextStart = clamp(roundToStep(dragPreview.start + delta, timelineStep), dragPreview.shiftStart, maxStart);
+        nextEnd = nextStart + duration;
+      }
+      setDragPreview(prev => {
+        if (!prev) return prev;
+        const next = { ...prev, previewStart: nextStart, previewEnd: nextEnd };
+        dragPreviewRef.current = next;
+        return next;
+      });
+    };
+    const finishDrag = () => {
+      const latest = dragPreviewRef.current || dragPreview;
+      const changed = latest.previewStart !== latest.start || latest.previewEnd !== latest.end;
+      if (changed) {
+        onUpdateSchoolPosition?.({
+          personId: latest.personId,
+          dayKey: latest.dayKey,
+          taskId: latest.taskId,
+          patch: {
+            start: latest.previewStart,
+            end: latest.previewEnd,
+            durationMinutes: Math.max(timelineStep, latest.previewEnd - latest.previewStart),
+          },
+        });
+      }
+      dragPreviewRef.current = null;
+      setDragPreview(null);
+    };
+    window.addEventListener('pointermove', updatePreview);
+    window.addEventListener('pointerup', finishDrag, { once: true });
+    return () => {
+      window.removeEventListener('pointermove', updatePreview);
+      window.removeEventListener('pointerup', finishDrag);
+    };
+  }, [dragPreview, onUpdateSchoolPosition]);
   const updateQuickPosition = (patch) => {
     setQuickPosition(prev => ({ ...prev, ...patch }));
+    setQuickError('');
+  };
+  const findFirstFreeSlot = (tasks, shift, duration) => {
+    const shiftStart = shift ? timeToMin(shift[0]) : null;
+    const shiftEnd = shift ? timeToMin(shift[1]) : null;
+    if (shiftStart == null || shiftEnd == null || duration <= 0 || shiftEnd - shiftStart < duration) return null;
+    let cursor = shiftStart;
+    const sortedTasks = [...(tasks || [])].sort((a, b) => a.start - b.start);
+    for (const task of sortedTasks) {
+      if (task.end <= cursor) continue;
+      if (task.start - cursor >= duration) return [cursor, cursor + duration];
+      cursor = Math.max(cursor, task.end);
+    }
+    return shiftEnd - cursor >= duration ? [cursor, cursor + duration] : null;
+  };
+  const addQuickLessonBlock = (template) => {
+    const personId = quickPosition.personId || (peopleToShow[0]?.id != null ? String(peopleToShow[0].id) : '');
+    const person = staff.find(member => String(member.id) === String(personId));
+    if (!person) {
+      setQuickError('Välj en person först.');
+      return;
+    }
+    const shift = getShiftForDay(person, activeDay, {
+      fridayWeek: activeDay === 'fri' ? currentFridayWeek : 1,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    });
+    if (!shift) {
+      setQuickError('Personen har ingen ramtid den här dagen.');
+      return;
+    }
+    const dayTasks = getAssignmentsForDay(assignments, person.id, activeDay, {
+      fridayWeek: activeDay === 'fri' ? currentFridayWeek : 1,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    });
+    const slot = findFirstFreeSlot(dayTasks, shift, template.duration);
+    if (!slot) {
+      setQuickError(`Ingen ledig lucka på ${template.duration} min hittades inom ramtiden.`);
+      return;
+    }
+    const [start, end] = slot;
+    const ok = onAddSchoolPosition?.({
+      personId,
+      dayKey: activeDay,
+      task: {
+        type: 'lesson',
+        label: template.title,
+        start,
+        end,
+        durationMinutes: template.duration,
+        target: quickPosition.target.trim(),
+        notes: '',
+        mustCover: true,
+        releaseForCover: false,
+        breakFlexibility: defaultBreakFlexibility('lesson'),
+        schoolRole: quickPosition.schoolRole || 'owner',
+      },
+    });
+    if (!ok) {
+      setQuickError('Kunde inte lägga till lektionsblocket.');
+      return;
+    }
+    setQuickPosition(prev => ({
+      ...prev,
+      personId,
+      type: 'lesson',
+      label: template.title,
+      start: minToTime(start),
+      end: minToTime(end),
+      mustCover: true,
+      releaseForCover: false,
+      schoolRole: prev.schoolRole || 'owner',
+    }));
     setQuickError('');
   };
   const submitQuickPosition = () => {
@@ -4900,6 +5187,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
         mustCover: !!quickPosition.mustCover,
         releaseForCover: !!quickPosition.releaseForCover,
         breakFlexibility: defaultBreakFlexibility(type),
+        schoolRole: quickPosition.schoolRole || 'owner',
       },
     });
     if (!ok) {
@@ -5011,7 +5299,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
               <thead className="text-xs uppercase tracking-wider text-stone-500 bg-stone-50">
                 <tr>
                   <th className="px-3 py-2 text-left rounded-l-lg">Person</th>
-                  {DAYS.map(day => <th key={day.key} className="px-3 py-2 text-left">{day.short}</th>)}
+                  {schoolDays.map(day => <th key={day.key} className="px-3 py-2 text-left">{day.short}</th>)}
                   <th className="px-3 py-2 text-right rounded-r-lg">Vecka</th>
                 </tr>
               </thead>
@@ -5024,7 +5312,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
                         <p className="font-medium text-stone-800">{person.name}</p>
                         <p className="text-xs text-stone-500">{getStaffRoleLabel(person.employmentRole)}{person.role ? ` · ${person.role}` : ''}</p>
                       </td>
-                      {DAYS.map(day => {
+                      {schoolDays.map(day => {
                         const shift = getShiftForDay(person, day.key, { fridayWeek: currentFridayWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation });
                         return (
                           <td key={day.key} className="px-3 py-3 tabular-nums text-stone-700">
@@ -5064,10 +5352,29 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Dag</label>
                 <div className="flex gap-1 p-1 rounded-xl bg-stone-100">
-                  {DAYS.map(day => (
+                  {schoolDays.map(day => (
                     <button key={day.key} type="button" onClick={() => setActiveDay(day.key)}
                       className={`flex-1 px-2 py-1.5 rounded-lg text-sm transition ${activeDay === day.key ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-600 hover:text-stone-900'}`}>
                       {day.short}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-stone-500">Snabbblock</p>
+                    <p className="text-xs text-stone-600 mt-0.5">Klicka för att lägga lektionen i första lediga lucka. Stretch/drag kommer senare.</p>
+                  </div>
+                  <span className="text-[10px] text-stone-400 whitespace-nowrap">inom ramtid</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {lessonQuickBlocks.map(block => (
+                    <button key={block.id} type="button" onClick={() => addQuickLessonBlock(block)}
+                      className="px-2.5 py-1.5 rounded-lg bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition text-xs tabular-nums"
+                      title={`Lägg ${block.title} ${block.duration} min i första lediga lucka`}>
+                      {block.label}
                     </button>
                   ))}
                 </div>
@@ -5080,12 +5387,20 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
                       type: e.target.value,
                       mustCover: assignmentRequiresCoverByDefault(e.target.value),
                       releaseForCover: assignmentReleaseDefault(e.target.value),
+                      schoolRole: e.target.value === 'resource' ? 'resource' : (quickPosition.schoolRole || 'owner'),
                     })}
                     className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700">
                     {schoolQuickTypes.map(typeId => {
                       const meta = getAssignmentTypeMeta(typeId);
                       return <option key={typeId} value={typeId}>{meta.label}</option>;
                     })}
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Roll i blocket</label>
+                  <select value={quickPosition.schoolRole || 'owner'} onChange={e => updateQuickPosition({ schoolRole: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700">
+                    {SCHOOL_TASK_ROLE_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
                   </select>
                 </div>
                 <div>
@@ -5137,6 +5452,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
                 <p className="text-sm text-stone-600 mt-1">
                   {builderShift ? `Ramtid ${builderShift[0]}-${builderShift[1]}` : 'Ingen ramtid denna dag. Lägg ramtid i Personal först.'}
                 </p>
+                <p className="text-xs text-stone-500 mt-1">Dra ett block för att flytta det. Dra i kanterna för att korta eller förlänga. Dubbelklicka eller använd Ändra för fler detaljer.</p>
               </div>
               {builderPerson && (
                 <button type="button" onClick={() => onOpenAssignmentEditor(builderPerson.id, activeDay)}
@@ -5151,7 +5467,8 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
                 <div className="flex justify-between text-[10px] uppercase tracking-wider text-stone-400 mb-2">
                   {[7,8,9,10,11,12,13,14,15,16,17].map(hour => <span key={hour}>{String(hour).padStart(2, '0')}:00</span>)}
                 </div>
-                <div className="relative h-32 rounded-xl bg-white ring-1 ring-stone-200 overflow-hidden">
+                <div ref={timelineRef} className="relative rounded-xl bg-white ring-1 ring-stone-200 overflow-hidden select-none"
+                  style={{ height: `${Math.max(150, 82 + builderTasks.length * 50)}px` }}>
                   <div className="absolute inset-0 grid grid-cols-10 divide-x divide-stone-100" aria-hidden="true">
                     {Array.from({ length: 10 }).map((_, idx) => <div key={idx} />)}
                   </div>
@@ -5163,14 +5480,60 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
                   )}
                   {builderTasks.map((task, idx) => {
                     const meta = getAssignmentTypeMeta(task.type);
+                    const visual = getSchoolTaskVisual(task);
+                    const preview = dragPreview?.taskId === task.id ? dragPreview : null;
+                    const visualStart = preview ? preview.previewStart : task.start;
+                    const visualEnd = preview ? preview.previewEnd : task.end;
+                    const collisionCount = getBuilderTaskCollisionCount(task, visualStart, visualEnd);
+                    const hasCollision = collisionCount > 0;
                     return (
-                      <button key={task.id} type="button" onClick={() => builderPerson && onOpenAssignmentEditor(builderPerson.id, activeDay)}
-                        className="absolute h-12 rounded-lg bg-white shadow-sm ring-1 px-2 py-1 text-left hover:shadow transition overflow-hidden"
-                        style={{ ...toTimelineStyle(task.start, task.end), top: `${48 + (idx % 2) * 42}px`, borderColor: meta.color }}>
-                        <span className="block text-[10px] tabular-nums text-stone-500">{minToTime(task.start)}-{minToTime(task.end)}</span>
-                        <span className="block text-xs text-stone-800 truncate" style={{ fontWeight: 600 }}>{task.label || meta.label}</span>
-                        <span className="block text-[10px] text-stone-500 truncate">{task.target || meta.label}</span>
-                      </button>
+                      <div key={task.id}
+                        onPointerDown={(event) => startSchoolTaskDrag(event, task, 'move')}
+                        title={hasCollision ? `Överlappar ${collisionCount} annat block` : `${task.label || meta.label} · ${minToTime(visualStart)}-${minToTime(visualEnd)}`}
+                        className={`group absolute h-11 rounded-lg ring-1 px-3 py-1 text-left hover:shadow transition overflow-hidden touch-none cursor-grab active:cursor-grabbing ${preview ? 'z-20 scale-[1.01]' : ''}`}
+                        style={{
+                          ...toTimelineStyle(visualStart, visualEnd),
+                          top: `${48 + idx * 50}px`,
+                          borderColor: hasCollision ? '#F59E0B' : visual.borderColor,
+                          borderStyle: visual.borderStyle,
+                          backgroundColor: hasCollision ? '#FEF3C7' : visual.strongBackgroundColor,
+                          boxShadow: hasCollision ? 'inset 0 0 0 2px #F59E0B, 0 2px 8px rgba(245,158,11,0.18)' : `inset 4px 0 0 ${visual.borderColor}, 0 1px 3px rgba(28,25,23,0.10)`,
+                        }}>
+                        <span
+                          role="button"
+                          aria-label="Dra starttid"
+                          tabIndex={0}
+                          onPointerDown={(event) => startSchoolTaskDrag(event, task, 'start')}
+                          className="absolute left-0 top-0 h-full w-3 cursor-ew-resize bg-white/70 hover:bg-white border-r border-white/80"
+                        />
+                        <span
+                          role="button"
+                          aria-label="Dra sluttid"
+                          tabIndex={0}
+                          onPointerDown={(event) => startSchoolTaskDrag(event, task, 'end')}
+                          className="absolute right-0 top-0 h-full w-3 cursor-ew-resize bg-white/70 hover:bg-white border-l border-white/80"
+                        />
+                        <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[10px] text-stone-400 pointer-events-none">⋮</span>
+                        <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] text-stone-400 pointer-events-none">⋮</span>
+                        <span className="block text-[10px] tabular-nums leading-none px-1 pr-12" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>{minToTime(visualStart)}-{minToTime(visualEnd)}</span>
+                        <span className="block text-xs leading-tight mt-0.5 px-1 pr-12 truncate" style={{ fontWeight: 700, color: visual.textColor }}>{task.label || meta.label}{task.target ? ` · ${task.target}` : ''}</span>
+                        <button type="button"
+                          onPointerDown={event => event.stopPropagation()}
+                          onClick={event => { event.stopPropagation(); builderPerson && onOpenAssignmentEditor(builderPerson.id, activeDay); }}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 rounded-md bg-white/90 px-1.5 py-0.5 text-[10px] text-stone-600 ring-1 ring-stone-200 opacity-0 group-hover:opacity-100 focus:opacity-100 transition">
+                          Ändra
+                        </button>
+                        {preview && (
+                          <span className="absolute left-1/2 -translate-x-1/2 -top-6 rounded-full bg-stone-900 text-white text-[10px] px-2 py-0.5 tabular-nums shadow">
+                            {minToTime(visualStart)}-{minToTime(visualEnd)}
+                          </span>
+                        )}
+                        {hasCollision && (
+                          <span className="absolute left-3 bottom-0.5 rounded-full bg-amber-100 text-amber-800 ring-1 ring-amber-300 px-1.5 py-0 text-[9px]" style={{ fontWeight: 700 }}>
+                            Krock
+                          </span>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -5180,14 +5543,34 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
             <div className="mt-4 space-y-2">
               {builderTasks.length > 0 ? builderTasks.map(task => {
                 const meta = getAssignmentTypeMeta(task.type);
+                const visual = getSchoolTaskVisual(task);
+                const hasCollision = getBuilderTaskCollisionCount(task) > 0;
                 return (
-                  <button key={task.id} type="button" onClick={() => builderPerson && onOpenAssignmentEditor(builderPerson.id, activeDay)}
-                    className="w-full rounded-xl bg-stone-50 ring-1 ring-stone-200 px-3 py-2 text-left hover:bg-stone-100 transition flex items-center gap-3">
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: meta.color }} />
-                    <span className="w-24 text-sm tabular-nums text-stone-700">{minToTime(task.start)}-{minToTime(task.end)}</span>
-                    <span className="flex-1 text-sm text-stone-800">{task.label || meta.label}</span>
-                    <span className="text-xs text-stone-500">{task.target || ''}</span>
-                  </button>
+                  <div key={task.id}
+                    className="w-full rounded-xl ring-1 px-3 py-2 flex items-center gap-3 flex-wrap"
+                    style={{
+                      backgroundColor: hasCollision ? '#FFFBEB' : visual.softBackgroundColor,
+                      borderColor: hasCollision ? '#F59E0B' : `${visual.borderColor}66`,
+                      boxShadow: hasCollision ? 'inset 0 0 0 1px #F59E0B' : `inset 4px 0 0 ${visual.borderColor}`,
+                    }}>
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: visual.color }} />
+                    <span className="w-24 text-sm tabular-nums text-stone-700 shrink-0">{minToTime(task.start)}-{minToTime(task.end)}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm text-stone-800 break-words">{task.label || meta.label}</span>
+                      {task.target && <span className="block text-xs text-stone-500 break-words">{task.target}</span>}
+                    </span>
+                    <span className="text-[10px] rounded-full bg-white ring-1 ring-stone-200 text-stone-500 px-2 py-0.5">{visual.role.short}</span>
+                    {hasCollision && <span className="text-[10px] rounded-full bg-amber-100 ring-1 ring-amber-300 text-amber-800 px-2 py-0.5">krock</span>}
+                    <button type="button" onClick={() => builderPerson && onOpenAssignmentEditor(builderPerson.id, activeDay)}
+                      className="px-2 py-1 rounded-lg text-xs bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition shrink-0">
+                      Ändra
+                    </button>
+                    <button type="button" onClick={() => builderPerson && deleteSchoolTask(builderPerson.id, activeDay, task)}
+                      className="px-2 py-1 rounded-lg text-xs bg-rose-50 text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100 transition inline-flex items-center gap-1 shrink-0"
+                      title="Ta bort blocket">
+                      <Trash2 size={12} />Ta bort
+                    </button>
+                  </div>
                 );
               }) : (
                 <p className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4 text-sm text-stone-500 text-center">
@@ -5252,14 +5635,17 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
                           <div className="space-y-1.5">
                             {tasks.map(task => {
                               const meta = getAssignmentTypeMeta(task.type);
+                              const visual = getSchoolTaskVisual(task);
                               return (
                                 <button key={task.id} type="button" onClick={() => { setActiveDay(day.key); onOpenAssignmentEditor(row.person.id, day.key); }}
-                                  className="w-full text-left rounded-lg bg-white ring-1 ring-stone-200 px-2 py-1.5 hover:bg-stone-50 transition">
+                                  className="w-full text-left rounded-lg ring-1 px-2 py-1.5 hover:bg-stone-50 transition"
+                                  style={{ backgroundColor: visual.strongBackgroundColor, borderColor: visual.borderColor, borderStyle: visual.borderStyle, boxShadow: `inset 3px 0 0 ${visual.borderColor}` }}>
                                   <div className="flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: meta.color }} />
+                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: visual.color }} />
                                     <span className="text-[11px] tabular-nums text-stone-500">{minToTime(task.start)}-{minToTime(task.end)}</span>
+                                    <span className="ml-auto text-[10px] text-stone-500">{visual.role.short}</span>
                                   </div>
-                                  <p className="text-xs text-stone-800 mt-0.5 truncate" style={{ fontWeight: 500 }}>{task.label || meta.label}</p>
+                                  <p className="text-xs text-stone-900 mt-0.5 truncate" style={{ fontWeight: 700 }}>{task.label || meta.label}</p>
                                   <p className="text-[11px] text-stone-500 truncate">{task.target || meta.label}</p>
                                 </button>
                               );
@@ -5328,12 +5714,20 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
                     type: e.target.value,
                     mustCover: assignmentRequiresCoverByDefault(e.target.value),
                     releaseForCover: assignmentReleaseDefault(e.target.value),
+                    schoolRole: e.target.value === 'resource' ? 'resource' : (quickPosition.schoolRole || 'owner'),
                   })}
                   className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700">
                   {schoolQuickTypes.map(typeId => {
                     const meta = getAssignmentTypeMeta(typeId);
                     return <option key={typeId} value={typeId}>{meta.label}</option>;
                   })}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Roll</label>
+                <select value={quickPosition.schoolRole || 'owner'} onChange={e => updateQuickPosition({ schoolRole: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700">
+                  {SCHOOL_TASK_ROLE_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
                 </select>
               </div>
               <div>
@@ -5376,7 +5770,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
           </div>
           <div className="flex flex-wrap gap-2 mb-4">
             <div className="flex gap-1 p-1 rounded-xl bg-stone-100">
-              {DAYS.map(day => (
+              {schoolDays.map(day => (
                 <button key={day.key} type="button" onClick={() => setActiveDay(day.key)}
                   className={`px-3 py-1.5 rounded-lg text-sm transition ${activeDay === day.key ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-600 hover:text-stone-900'}`}>
                   {day.short}
@@ -5406,24 +5800,31 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
             <div className="space-y-2">
               {positionRows.map(({ person, task }) => {
                 const meta = getAssignmentTypeMeta(task.type);
-                const dept = departments.find(d => d.id === person.deptId);
+                const visual = getSchoolTaskVisual(task);
                 return (
-                  <div key={`${person.id}-${task.id}`} className="rounded-xl bg-stone-50 ring-1 ring-stone-200 px-3 py-2 flex items-center gap-3 flex-wrap">
+                  <div key={`${person.id}-${task.id}`} className="rounded-xl ring-1 px-3 py-2 flex items-center gap-3 flex-wrap"
+                    style={{ backgroundColor: visual.strongBackgroundColor, borderColor: visual.borderColor, borderStyle: visual.borderStyle, boxShadow: `inset 4px 0 0 ${visual.borderColor}` }}>
                     <div className="w-28 tabular-nums text-sm text-stone-800 font-medium">{minToTime(task.start)}-{minToTime(task.end)}</div>
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: meta.color }} />
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: visual.color }} />
                     <div className="min-w-[180px] flex-1">
-                      <p className="text-sm text-stone-800 font-medium">{task.label || meta.label}</p>
+                      <p className="text-sm text-stone-900 font-semibold">{task.label || meta.label}</p>
                       <p className="text-xs text-stone-500">
-                        {task.target || 'ingen grupp/klass angiven'} · {person.name} · {getStaffRoleLabel(person.employmentRole)}{person.role ? ` · ${person.role}` : ''}{dept ? ` · ${dept.name}` : ''}
+                        {task.target || 'ingen grupp/klass angiven'} · {person.name} · {getStaffRoleLabel(person.employmentRole)}{person.role ? ` · ${person.role}` : ''}
                       </p>
                     </div>
                     <div className="flex items-center gap-1 text-[11px]">
+                      <span className="rounded-full bg-white/80 text-stone-600 ring-1 ring-stone-200 px-2 py-0.5">{visual.role.label}</span>
                       {task.mustCover && <span className="rounded-full bg-rose-50 text-rose-700 ring-1 ring-rose-200 px-2 py-0.5">måste täckas</span>}
                       {task.releaseForCover ? <span className="rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 px-2 py-0.5">flyttbar</span> : <span className="rounded-full bg-stone-100 text-stone-600 ring-1 ring-stone-200 px-2 py-0.5">låst</span>}
                     </div>
                     <button type="button" onClick={() => onOpenAssignmentEditor(person.id, activeDay)}
                       className="px-2 py-1 rounded-lg text-xs bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">
                       Ändra
+                    </button>
+                    <button type="button" onClick={() => deleteSchoolTask(person.id, activeDay, task)}
+                      className="px-2 py-1 rounded-lg text-xs bg-rose-50 text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100 transition inline-flex items-center gap-1"
+                      title="Ta bort lektion eller uppdrag">
+                      <Trash2 size={12} />Ta bort
                     </button>
                   </div>
                 );
@@ -6559,6 +6960,32 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
 }
 
 function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations, onEdit, onAdd, onLoadExample, departments }) {
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [staffSearch, setStaffSearch] = useState('');
+  const roleFilterOptions = [
+    { id: 'all', label: 'Alla', match: () => true },
+    { id: 'fritids', label: 'Lärare i fritidshem', match: person => getStaffRoleCategory(person) === 'fritids' },
+    { id: 'teacher', label: 'Lärare', match: person => getStaffRoleCategory(person) === 'teacher' },
+    { id: 'support', label: 'Vikarie/resurs', match: person => getStaffRoleCategory(person) === 'support' },
+    { id: 'other', label: 'Övriga', match: person => getStaffRoleCategory(person) === 'other' },
+  ];
+  const roleCounts = useMemo(() => {
+    return Object.fromEntries(roleFilterOptions.map(option => [
+      option.id,
+      staff.filter(person => option.match(person)).length,
+    ]));
+  }, [staff]);
+  const filteredStaff = useMemo(() => {
+    const activeOption = roleFilterOptions.find(option => option.id === roleFilter) || roleFilterOptions[0];
+    const needle = staffSearch.trim().toLowerCase();
+    return staff.filter(person => {
+      if (!activeOption.match(person)) return false;
+      if (!needle) return true;
+      const dept = getDept(person.deptId, departments);
+      const text = `${person.name || ''} ${getStaffRoleLabel(person.employmentRole)} ${person.role || ''} ${dept.name || ''}`.toLowerCase();
+      return text.includes(needle);
+    });
+  }, [staff, departments, roleFilter, staffSearch]);
   if (staff.length === 0) {
     return (
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-12 text-center">
@@ -6586,6 +7013,28 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
       <TabIntro>
         Lägg till och redigera personalen. Börja med reglerna och passurvalet — de styr hur generatorn pusslar. Manuell veckoredigering här är för specialfall; vanligtvis finjusterar man enklast direkt i veckovyn efteråt. Listan visar varje persons mål jämfört med faktisk schemalagd arbetstid på arbetsplatsen efter rastregeln.
       </TabIntro>
+      <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4 flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Filtrera personal</p>
+            <p className="text-sm text-stone-600">Visa bara den grupp du arbetar med just nu. Filtret påverkar bara listan här, inte schemat eller generatorn.</p>
+          </div>
+          <input type="search" value={staffSearch} onChange={e => setStaffSearch(e.target.value)}
+            placeholder="Sök namn, roll, avdelning..."
+            className="px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 min-w-[260px]" />
+        </div>
+        <div className="flex gap-1 p-1 rounded-xl bg-stone-100 overflow-x-auto">
+          {roleFilterOptions.map(option => (
+            <button key={option.id} type="button" onClick={() => setRoleFilter(option.id)}
+              className={`px-3 py-2 rounded-lg text-sm whitespace-nowrap transition ${roleFilter === option.id ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-200' : 'text-stone-600 hover:text-stone-900 hover:bg-stone-50'}`}>
+              {option.label}
+              <span className={`ml-1.5 text-[10px] rounded-full px-1.5 py-0.5 ${roleFilter === option.id ? 'bg-stone-100 text-stone-600' : 'bg-white/70 text-stone-500'}`}>
+                {roleCounts[option.id] || 0}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-stone-50 border-b border-stone-200">
@@ -6601,7 +7050,7 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
             </tr>
           </thead>
           <tbody>
-            {staff.map(s => {
+            {filteredStaff.map(s => {
               const wm = weeklyMinutes(s, fridayCycleWeeks, fridayTemplateRotation);
               const targetMin = getTargetMin(s);
               const diff = wm - targetMin;
@@ -6666,10 +7115,17 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
                 </tr>
               );
             })}
+            {filteredStaff.length === 0 && (
+              <tr>
+                <td colSpan="9" className="px-4 py-8 text-center text-sm text-stone-500">
+                  Ingen personal matchar filtret eller sökningen.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
         <div className="px-4 py-3 bg-stone-50/50 border-t border-stone-200 flex justify-between items-center flex-wrap gap-2">
-          <span className="text-xs text-stone-500">{staff.length} personer totalt</span>
+          <span className="text-xs text-stone-500">{filteredStaff.length} visas av {staff.length} personer totalt</span>
           <button onClick={onAdd} className="text-sm flex items-center gap-1.5 text-stone-700 hover:text-stone-900">
             <Plus size={14} />Lägg till personal
           </button>
@@ -7554,6 +8010,8 @@ function DriftView({
             const shiftEnd = timeToMin(row.shift[1]);
             const dept = row.dept;
             const mustCoverTask = row.tasks.find(t => t.mustCover);
+            const mustCoverMeta = mustCoverTask ? getAssignmentTypeMeta(mustCoverTask.type) : null;
+            const mustCoverColor = mustCoverTask ? getSchoolTaskVisual(mustCoverTask).color : '#57534E';
             const soft = softColor(dept.color);
             return (
               <div key={row.person.id} className="flex items-center" style={{ height: 24, marginBottom: 2 }}>
@@ -7574,14 +8032,19 @@ function DriftView({
                       opacity: row.isAbsent ? 0.7 : 1,
                     }} />
                   {mustCoverTask && (
-                    <div className="absolute rounded-sm" title={`${mustCoverTask.label || inferAssignmentLabel(mustCoverTask.type)} · ${minToTime(mustCoverTask.start)}–${minToTime(mustCoverTask.end)}`}
+                    <div className="absolute rounded-full" title={`${mustCoverTask.label || inferAssignmentLabel(mustCoverTask.type)} · ${minToTime(mustCoverTask.start)}-${minToTime(mustCoverTask.end)}`}
                       style={{
-                        top: 6, bottom: 6,
+                        top: 5, bottom: 5,
                         left: `${driftPct(mustCoverTask.start)}%`,
-                        width: `${driftPct(mustCoverTask.end) - driftPct(mustCoverTask.start)}%`,
-                        background: row.isAbsent ? '#BE123C' : '#1C1917',
-                        opacity: row.isAbsent ? 0.9 : 0.85,
-                      }} />
+                        width: `${Math.max(2.5, driftPct(mustCoverTask.end) - driftPct(mustCoverTask.start))}%`,
+                        background: row.isAbsent ? '#FFE4E6' : `${mustCoverColor}22`,
+                        boxShadow: `inset 0 0 0 1px ${row.isAbsent ? '#BE123C' : mustCoverColor}`,
+                        color: row.isAbsent ? '#9F1239' : mustCoverColor,
+                      }}>
+                      <span className="block px-1.5 text-[9px] leading-[14px] truncate" style={{ fontWeight: 700 }}>
+                        {mustCoverTask.label || mustCoverMeta?.label || 'Uppdrag'}
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>
@@ -8512,14 +8975,18 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
             <div className="space-y-3">
               {draftTasks.map(task => {
                 const meta = getAssignmentTypeMeta(task.type);
+                const visual = getSchoolTaskVisual(task);
                 return (
                   <div key={task.id} className="rounded-2xl bg-white ring-1 ring-stone-200 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full" style={{ backgroundColor: meta.color }} />
+                        <span className="w-3 h-3 rounded-full" style={{ backgroundColor: visual.color }} />
                         <div>
                           <p className="text-sm text-stone-800" style={{ fontWeight: 500 }}>{task.label || inferAssignmentLabel(task.type)}</p>
-                          <p className="text-xs text-stone-500">{minToTime(task.start)}–{minToTime(task.end)}</p>
+                          <p className="text-xs text-stone-500">
+                            {minToTime(task.start)}–{minToTime(task.end)}
+                            {assignmentSupportsSchoolRole(task.type) ? ` · ${visual.role.label}` : ''}
+                          </p>
                         </div>
                       </div>
                       <button type="button" onClick={() => removeTask(task.id)}
@@ -8540,6 +9007,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
                               mustCover: assignmentRequiresCoverByDefault(nextType),
                               breakFlexibility: defaultBreakFlexibility(nextType),
                               releaseForCover: assignmentReleaseDefault(nextType),
+                              schoolRole: nextType === 'resource' ? 'resource' : (assignmentSupportsSchoolRole(nextType) ? (task.schoolRole || 'owner') : 'owner'),
                             });
                           }}>
                           {ASSIGNMENT_TYPES.map(type => (
@@ -8552,6 +9020,17 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
                         <input className="task-input w-full" value={task.label}
                           onChange={e => updateTask(task.id, { label: e.target.value })} />
                       </div>
+                      {assignmentSupportsSchoolRole(task.type) && (
+                        <div className="md:col-span-2">
+                          <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Roll i skolan</label>
+                          <select className="task-input w-full" value={task.schoolRole || 'owner'}
+                            onChange={e => updateTask(task.id, { schoolRole: e.target.value })}>
+                            {SCHOOL_TASK_ROLE_OPTIONS.map(option => (
+                              <option key={option.id} value={option.id}>{option.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                       <div>
                         <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Start</label>
                         <TimeTextInput className="task-input w-full" valueMinutes={task.start} showSteppers stepMinutes={5}
@@ -11288,6 +11767,56 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v89',
+      title: 'Tydligare ämnesfärger och krockvarning',
+      body: 'Lektionsblocken har fått starkare färg, tydligare vänsterkant och bättre textkontrast. Byggvyn varnar nu när block överlappar varandra.',
+    },
+    {
+      version: 'v88',
+      title: 'Tydligare drag och mjukare Drift',
+      body: 'Skolblocken har fått synligare draghandtag, en Ändra-knapp direkt på blocket och tidsbubbla vid drag. Driftens kritiska uppdrag visas nu som färgade uppdragsmarkörer i stället för svarta streck.',
+    },
+    {
+      version: 'v87',
+      title: 'Fredag i Skola och första drag/stretch',
+      body: 'Skola-vyn visar nu även fredag. I byggläget kan lektionsblock flyttas på tidslinjen och kanterna dras för att justera start och slut.',
+    },
+    {
+      version: 'v86',
+      title: 'Radera skolblock direkt',
+      body: 'Lektionsblock och skoluppdrag kan nu tas bort direkt från Skola-vyn. Blocklistan visar också längre text lite bättre medan vi fortsätter finputsa layouten.',
+    },
+    {
+      version: 'v85',
+      title: 'Ämnesfärger och ansvar/resurs',
+      body: 'Skolblock får nu färg efter ämne och kan markeras som Ansvarig, Resurs eller Stöd. Resurs/stöd visas med annan kantstil i skolvyerna.',
+    },
+    {
+      version: 'v84',
+      title: 'Rätt slöjdnamn',
+      body: 'Snabbblocken använder nu bara träslöjd och textilslöjd, med fullständiga namn i knapparna.',
+    },
+    {
+      version: 'v83',
+      title: 'Fler lektionssnabbblock',
+      body: 'Snabbblocken i Skola innehåller nu även slöjd, träslöjd, textilslöjd, idrott, bild och musik i 40- och 60-minutersvarianter.',
+    },
+    {
+      version: 'v82',
+      title: 'Snabbblock för lektioner',
+      body: 'Bygg schema i Skola har fått färdiga lektionsknappar som sv 40, ma 60 och eng 40. Klick lägger blocket i första lediga lucka inom vald persons ramtid.',
+    },
+    {
+      version: 'v81',
+      title: 'Filter i Personal',
+      body: 'Personalvyn kan nu filtreras på alla, lärare i fritidshem, lärare, vikarie/resurs och övriga samt sökas på namn, roll och avdelning.',
+    },
+    {
+      version: 'v80',
+      title: 'Skolbyggaren följer testfeedback',
+      body: 'Rast, förberedelsetid och planering syns nu i Skola, byggarens tidslinje lägger block radvis och skolvyn tonar ner avdelningsnamn som kunde ge fritidskänsla.',
+    },
     {
       version: 'v79',
       title: 'Tydligare språk i Skola',
