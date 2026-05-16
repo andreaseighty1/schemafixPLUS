@@ -3239,6 +3239,22 @@ function FritidsSchemaApp() {
   const [showExamplePicker, setShowExamplePicker] = useState(false);
   const [tourStep, setTourStep] = useState(null); // null = ingen tur aktiv, annars 0..5
   const [tourMode, setTourMode] = useState(WORKFLOW_MODE_GENERATE);
+  const footerHint = useMemo(() => {
+    if (view === 'school') return 'Skola använder samma personal, uppdrag och Drift. Bygg lärarschema med block som sedan kan analyseras vid frånvaro.';
+    if (view === 'drift') return 'Drift är för dagens och närmaste tidens frånvaro. Den analyserar avvikelser och föreslår lösningar utan att skriva om grundschemat.';
+    if (view === 'tasks') return 'Uppdrag beskriver det som måste täckas: lektioner, rastvärd, pedagogisk lunch, öppning, stängning och fasta tider.';
+    if (view === 'staff') return 'Personal styr roller, ramtider, befintliga scheman och pusselregler. Klicka på en person för att redigera.';
+    if (view === 'schedule') {
+      return workflowMode === WORKFLOW_MODE_EXISTING
+        ? 'Vecka visar ditt befintliga schema. Klicka på en person för att justera tider utan att behöva generera nytt.'
+        : 'Klicka på en person för att redigera detaljer. Tryck "Generera schemaförslag" när appen ska pussla fram alternativ.';
+    }
+    if (view === 'rules') return 'Bemanning används främst när appen ska pussla schema, hitta luckor eller kontrollera att täckningen räcker.';
+    if (view === 'passbank') return 'Passbanken beskriver vilka arbetspass generatorn kan använda och vilka dagar passen får ligga på.';
+    if (view === 'friday') return 'Fredagsrullen styr personer eller mallar som har olika fredagstider mellan veckor.';
+    if (view === 'settings') return 'Inställningar samlar grundstruktur, exempeldata och säkra startpunkter för appen.';
+    return 'Välj rum efter vad du vill göra: bygg schema, lägg uppdrag, hantera drift eller arbeta med skoldelen.';
+  }, [view, workflowMode]);
 
   // När cykellängden ändras: justera alla personers fridayRotation till rätt längd,
   // och håll currentFridayWeek inom giltigt intervall.
@@ -3379,7 +3395,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 23,
+    version: 27,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3976,7 +3992,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v75</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v79</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4172,7 +4188,7 @@ function FritidsSchemaApp() {
           onLoadExample={loadExample} onClearAll={clearAll} />}
 
         <footer className="mt-10 pt-6 border-t border-stone-200 text-xs text-stone-500 flex justify-between items-start gap-4 flex-wrap">
-          <span>Klicka på en person för att redigera detaljer. Tryck "Generera schemaförslag" när du vill att appen pusslar fram alternativ baserat på allas villkor.</span>
+          <span>{footerHint}</span>
           <span className="text-stone-400">© 2026 Andreas Jonsson · I samarbete med Madeleine Ljunglöf, förstelärare</span>
         </footer>
           </div>
@@ -4739,6 +4755,11 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
   });
   const [quickError, setQuickError] = useState('');
   const schoolTypes = new Set(['lesson', 'studySupport', 'yard', 'pedLunch', 'meeting', 'collab', 'resource']);
+  const isSchoolTask = (person, task) => {
+    const searchable = `${person.name || ''} ${person.role || ''} ${task.label || ''} ${task.target || ''} ${task.notes || ''} ${getAssignmentTypeMeta(task.type).label}`.toLowerCase();
+    const targetLooksSchool = /f-?1|2-?3|klass|grupp|ar|ars|skola|lektion|studiest|studiestod|undervisning/.test(searchable);
+    return schoolTypes.has(task.type) || targetLooksSchool;
+  };
   const getSchoolRoleCategory = (person) => {
     return getStaffRoleCategory(person);
   };
@@ -4760,8 +4781,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
       });
       tasks.forEach(task => {
         const searchable = `${person.name || ''} ${person.role || ''} ${task.label || ''} ${task.target || ''} ${task.notes || ''} ${getAssignmentTypeMeta(task.type).label}`.toLowerCase();
-        const targetLooksSchool = /f-?1|2-?3|klass|grupp|år|ars|skola|lektion|studiestöd|studiestod|undervisning/.test(searchable);
-        if (!schoolTypes.has(task.type) && !targetLooksSchool) return;
+        if (!isSchoolTask(person, task)) return;
         if (personFilter !== 'all' && String(person.id) !== String(personFilter)) return;
         if (query.trim() && !searchable.includes(query.trim().toLowerCase())) return;
         rows.push({ person, task });
@@ -4769,6 +4789,31 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
     });
     return rows.sort((a, b) => a.task.start - b.task.start || String(a.person.name).localeCompare(String(b.person.name), 'sv'));
   }, [peopleToShow, assignments, activeDay, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation, personFilter, query]);
+  const weeklySchoolRows = useMemo(() => {
+    return peopleToShow.map(person => {
+      const days = DAYS.map(day => {
+        const shift = getShiftForDay(person, day.key, {
+          fridayWeek: day.key === 'fri' ? currentFridayWeek : 1,
+          cycleWeeks: fridayCycleWeeks,
+          fridayTemplateRotation,
+        });
+        const tasks = getAssignmentsForDay(assignments, person.id, day.key, {
+          fridayWeek: day.key === 'fri' ? currentFridayWeek : 1,
+          cycleWeeks: fridayCycleWeeks,
+          fridayTemplateRotation,
+        })
+          .filter(task => isSchoolTask(person, task))
+          .sort((a, b) => a.start - b.start);
+        return { day, shift, tasks };
+      });
+      return {
+        person,
+        days,
+        weeklyMinutes: weeklyMinutes(person, fridayCycleWeeks, fridayTemplateRotation),
+        taskCount: days.reduce((sum, day) => sum + day.tasks.length, 0),
+      };
+    });
+  }, [peopleToShow, assignments, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]);
   const schoolPositionCount = useMemo(() => {
     let count = 0;
     DAYS.forEach(day => {
@@ -4789,6 +4834,30 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
   const quickPerson = staff.find(person => String(person.id) === String(quickPosition.personId));
   const quickStartMin = parseFlexibleTimeInput(quickPosition.start);
   const quickEndMin = parseFlexibleTimeInput(quickPosition.end);
+  const builderPerson = staff.find(person => String(person.id) === String(quickPosition.personId || peopleToShow[0]?.id || ''));
+  const builderShift = builderPerson ? getShiftForDay(builderPerson, activeDay, {
+    fridayWeek: activeDay === 'fri' ? currentFridayWeek : 1,
+    cycleWeeks: fridayCycleWeeks,
+    fridayTemplateRotation,
+  }) : null;
+  const builderTasks = builderPerson ? getAssignmentsForDay(assignments, builderPerson.id, activeDay, {
+    fridayWeek: activeDay === 'fri' ? currentFridayWeek : 1,
+    cycleWeeks: fridayCycleWeeks,
+    fridayTemplateRotation,
+  })
+    .filter(task => isSchoolTask(builderPerson, task))
+    .sort((a, b) => a.start - b.start) : [];
+  const timelineStart = 7 * 60;
+  const timelineEnd = 17 * 60;
+  const timelineSpan = timelineEnd - timelineStart;
+  const toTimelineStyle = (start, end) => {
+    const safeStart = Math.max(timelineStart, Math.min(timelineEnd - 10, start ?? timelineStart));
+    const safeEnd = Math.max(safeStart + 10, Math.min(timelineEnd, end ?? safeStart + 10));
+    return {
+      left: `${((safeStart - timelineStart) / timelineSpan) * 100}%`,
+      width: `${Math.max(5, ((safeEnd - safeStart) / timelineSpan) * 100)}%`,
+    };
+  };
   const updateQuickPosition = (patch) => {
     setQuickPosition(prev => ({ ...prev, ...patch }));
     setQuickError('');
@@ -4859,14 +4928,16 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
           </div>
           <div className="grid grid-cols-2 gap-2 min-w-[260px]">
             <StatCard label="Skolpersoner" value={schoolPeople.length} sub={schoolPeople.length ? 'via roll/namn' : 'lägg roller i Personal'} />
-            <StatCard label="Skolpositioner" value={schoolPositionCount} sub="från Uppdrag" />
+            <StatCard label="Lektioner & uppdrag" value={schoolPositionCount} sub="från Uppdrag" />
           </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-1 p-1 rounded-xl bg-stone-100">
           {[
             { id: 'overview', label: 'Översikt', icon: School },
             { id: 'time', label: 'Ramtider', icon: Clock },
-            { id: 'positions', label: 'Schemapositioner', icon: BookOpen },
+            { id: 'builder', label: 'Bygg schema', icon: GraduationCap },
+            { id: 'weekly', label: 'Lärarschema', icon: Calendar },
+            { id: 'positions', label: 'Lektioner & uppdrag', icon: BookOpen },
             { id: 'sources', label: 'Källor', icon: HelpCircle },
           ].map(tab => {
             const Icon = tab.icon;
@@ -4886,7 +4957,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Så håller vi ihop skola och fritids</p>
             <div className="space-y-3 text-sm text-stone-700 leading-relaxed">
               <p><strong>Personal:</strong> alla vuxna bor på samma ställe. Sätt gärna roll som lärare, samverkare, resurs eller fritids.</p>
-              <p><strong>Uppdrag:</strong> lektioner, studiestöd, pedagogisk lunch, rastvärd och möten blir schemapositioner som kan behöva täckas.</p>
+              <p><strong>Uppdrag:</strong> lektioner, studiestöd, pedagogisk lunch, rastvärd och möten är samma uppdrag som i Uppdrag-delen, men visas här med skolglasögon.</p>
               <p><strong>Drift:</strong> en gemensam frånvarovy visar både skola och fritids när någon är borta.</p>
             </div>
             <div className="flex flex-wrap gap-2 mt-4">
@@ -4972,22 +5043,272 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
         </div>
       )}
 
+      {activeTab === 'builder' && (
+        <div className="grid grid-cols-1 xl:grid-cols-[0.85fr,1.15fr] gap-4">
+          <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Bygg lärarschema</p>
+            <h3 className="display-font text-2xl text-stone-800">Lägg block</h3>
+            <p className="text-sm text-stone-600 mt-1 mb-4">Skapa lektioner, möten, rastvärd och studiestöd direkt i skolrummet. Blocken sparas som uppdrag och följer med till Drift.</p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Person</label>
+                <select value={quickPosition.personId || (peopleToShow[0]?.id != null ? String(peopleToShow[0].id) : '')}
+                  onChange={e => updateQuickPosition({ personId: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700">
+                  <option value="">Välj person</option>
+                  {peopleToShow.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Dag</label>
+                <div className="flex gap-1 p-1 rounded-xl bg-stone-100">
+                  {DAYS.map(day => (
+                    <button key={day.key} type="button" onClick={() => setActiveDay(day.key)}
+                      className={`flex-1 px-2 py-1.5 rounded-lg text-sm transition ${activeDay === day.key ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-600 hover:text-stone-900'}`}>
+                      {day.short}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="col-span-2">
+                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Typ</label>
+                  <select value={quickPosition.type} onChange={e => updateQuickPosition({
+                      type: e.target.value,
+                      mustCover: assignmentRequiresCoverByDefault(e.target.value),
+                      releaseForCover: assignmentReleaseDefault(e.target.value),
+                    })}
+                    className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700">
+                    {schoolQuickTypes.map(typeId => {
+                      const meta = getAssignmentTypeMeta(typeId);
+                      return <option key={typeId} value={typeId}>{meta.label}</option>;
+                    })}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Start</label>
+                  <input value={quickPosition.start} onChange={e => updateQuickPosition({ start: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 tabular-nums" placeholder="08:20" />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Slut</label>
+                  <input value={quickPosition.end} onChange={e => updateQuickPosition({ end: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 tabular-nums" placeholder="09:00" />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Grupp/klass</label>
+                  <input value={quickPosition.target} onChange={e => updateQuickPosition({ target: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700" placeholder="F-1A" />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Ämne/text</label>
+                  <input value={quickPosition.label} onChange={e => updateQuickPosition({ label: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700" placeholder={inferAssignmentLabel(quickPosition.type)} />
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3 space-y-2">
+                <label className="inline-flex items-center gap-2 text-xs text-stone-600">
+                  <input type="checkbox" checked={quickPosition.mustCover} onChange={e => updateQuickPosition({ mustCover: e.target.checked })} />
+                  Måste täckas vid frånvaro
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs text-stone-600">
+                  <input type="checkbox" checked={quickPosition.releaseForCover} onChange={e => updateQuickPosition({ releaseForCover: e.target.checked })} />
+                  Kan flyttas för att täcka annat
+                </label>
+              </div>
+
+              {quickError && <p className="text-xs text-rose-700 bg-rose-50 ring-1 ring-rose-200 rounded-lg px-3 py-2">{quickError}</p>}
+              <button type="button" onClick={submitQuickPosition}
+                className="w-full px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center justify-center gap-2">
+                <Plus size={14} />Lägg i lärarschemat
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+            <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+              <div>
+                <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">{getDayMeta(activeDay).label}</p>
+                <h3 className="display-font text-2xl text-stone-800">{builderPerson ? builderPerson.name : 'Välj person'}</h3>
+                <p className="text-sm text-stone-600 mt-1">
+                  {builderShift ? `Ramtid ${builderShift[0]}-${builderShift[1]}` : 'Ingen ramtid denna dag. Lägg ramtid i Personal först.'}
+                </p>
+              </div>
+              {builderPerson && (
+                <button type="button" onClick={() => onOpenAssignmentEditor(builderPerson.id, activeDay)}
+                  className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition inline-flex items-center gap-2">
+                  <Edit3 size={14} />Finredigera
+                </button>
+              )}
+            </div>
+
+            <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4 overflow-x-auto">
+              <div className="min-w-[640px]">
+                <div className="flex justify-between text-[10px] uppercase tracking-wider text-stone-400 mb-2">
+                  {[7,8,9,10,11,12,13,14,15,16,17].map(hour => <span key={hour}>{String(hour).padStart(2, '0')}:00</span>)}
+                </div>
+                <div className="relative h-32 rounded-xl bg-white ring-1 ring-stone-200 overflow-hidden">
+                  <div className="absolute inset-0 grid grid-cols-10 divide-x divide-stone-100" aria-hidden="true">
+                    {Array.from({ length: 10 }).map((_, idx) => <div key={idx} />)}
+                  </div>
+                  {builderShift && (
+                    <div className="absolute top-3 h-6 rounded-full bg-stone-100 ring-1 ring-stone-200"
+                      style={toTimelineStyle(timeToMin(builderShift[0]), timeToMin(builderShift[1]))}>
+                      <span className="block text-[10px] text-stone-500 px-2 py-1 truncate">Ramtid</span>
+                    </div>
+                  )}
+                  {builderTasks.map((task, idx) => {
+                    const meta = getAssignmentTypeMeta(task.type);
+                    return (
+                      <button key={task.id} type="button" onClick={() => builderPerson && onOpenAssignmentEditor(builderPerson.id, activeDay)}
+                        className="absolute h-12 rounded-lg bg-white shadow-sm ring-1 px-2 py-1 text-left hover:shadow transition overflow-hidden"
+                        style={{ ...toTimelineStyle(task.start, task.end), top: `${48 + (idx % 2) * 42}px`, borderColor: meta.color }}>
+                        <span className="block text-[10px] tabular-nums text-stone-500">{minToTime(task.start)}-{minToTime(task.end)}</span>
+                        <span className="block text-xs text-stone-800 truncate" style={{ fontWeight: 600 }}>{task.label || meta.label}</span>
+                        <span className="block text-[10px] text-stone-500 truncate">{task.target || meta.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {builderTasks.length > 0 ? builderTasks.map(task => {
+                const meta = getAssignmentTypeMeta(task.type);
+                return (
+                  <button key={task.id} type="button" onClick={() => builderPerson && onOpenAssignmentEditor(builderPerson.id, activeDay)}
+                    className="w-full rounded-xl bg-stone-50 ring-1 ring-stone-200 px-3 py-2 text-left hover:bg-stone-100 transition flex items-center gap-3">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: meta.color }} />
+                    <span className="w-24 text-sm tabular-nums text-stone-700">{minToTime(task.start)}-{minToTime(task.end)}</span>
+                    <span className="flex-1 text-sm text-stone-800">{task.label || meta.label}</span>
+                    <span className="text-xs text-stone-500">{task.target || ''}</span>
+                  </button>
+                );
+              }) : (
+                <p className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4 text-sm text-stone-500 text-center">
+                  Inga skolblock ligger på {getDayMeta(activeDay).label.toLowerCase()} ännu.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'weekly' && (
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Veckoöversikt</p>
+              <h3 className="display-font text-2xl text-stone-800">Lärarschema</h3>
+              <p className="text-sm text-stone-600 mt-1">Här syns ramtider, lektioner och uppdrag ihop, utan att du behöver öppna en person i taget.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <select value={roleFilter} onChange={e => { setRoleFilter(e.target.value); setPersonFilter('all'); }}
+                className="px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700"
+                title="Filtrera på roll eller befattning">
+                <option value="school">Skola: lärare/samverkare/resurs</option>
+                <option value="teacher">Lärare</option>
+                <option value="support">Samverkare/resurs</option>
+                <option value="fritids">Lärare i fritidshem</option>
+                <option value="other">Övriga/utan roll</option>
+                <option value="all">Alla roller</option>
+              </select>
+              <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition inline-flex items-center gap-2">
+                <Users size={14} />Personal
+              </button>
+              <button type="button" onClick={() => onOpenTasksDay(activeDay)} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+                <Briefcase size={14} />Uppdrag
+              </button>
+            </div>
+          </div>
+
+          {weeklySchoolRows.length > 0 ? (
+            <div className="space-y-4">
+              {weeklySchoolRows.map(row => (
+                <div key={row.person.id} className="rounded-xl bg-stone-50 ring-1 ring-stone-200 overflow-hidden">
+                  <div className="px-4 py-3 bg-white border-b border-stone-200 flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <p className="text-sm text-stone-900" style={{ fontWeight: 600 }}>{row.person.name}</p>
+                      <p className="text-xs text-stone-500">{getStaffRoleLabel(row.person.employmentRole)}{row.person.role ? ` · ${row.person.role}` : ''}</p>
+                    </div>
+                    <div className="flex gap-2 text-[11px] text-stone-600 flex-wrap">
+                      <span className="rounded-full bg-stone-100 ring-1 ring-stone-200 px-2 py-0.5 tabular-nums">{minToHM(row.weeklyMinutes)} på plats</span>
+                      <span className="rounded-full bg-stone-100 ring-1 ring-stone-200 px-2 py-0.5">{row.taskCount} lektioner/uppdrag</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-5 divide-y md:divide-y-0 md:divide-x divide-stone-200">
+                    {row.days.map(({ day, shift, tasks }) => (
+                      <div key={day.key} className="p-3 min-h-[150px] bg-white/60">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <p className="text-xs uppercase tracking-wider text-stone-500">{day.short}</p>
+                          <span className="text-[11px] tabular-nums text-stone-600">{shift ? `${shift[0]}-${shift[1]}` : 'ledig'}</span>
+                        </div>
+                        {tasks.length > 0 ? (
+                          <div className="space-y-1.5">
+                            {tasks.map(task => {
+                              const meta = getAssignmentTypeMeta(task.type);
+                              return (
+                                <button key={task.id} type="button" onClick={() => { setActiveDay(day.key); onOpenAssignmentEditor(row.person.id, day.key); }}
+                                  className="w-full text-left rounded-lg bg-white ring-1 ring-stone-200 px-2 py-1.5 hover:bg-stone-50 transition">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: meta.color }} />
+                                    <span className="text-[11px] tabular-nums text-stone-500">{minToTime(task.start)}-{minToTime(task.end)}</span>
+                                  </div>
+                                  <p className="text-xs text-stone-800 mt-0.5 truncate" style={{ fontWeight: 500 }}>{task.label || meta.label}</p>
+                                  <p className="text-[11px] text-stone-500 truncate">{task.target || meta.label}</p>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-stone-400 italic mt-4">{shift ? 'Inga lektioner eller uppdrag' : 'Ingen ramtid'}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-6 text-center">
+              <Calendar size={24} className="mx-auto text-stone-300 mb-2" />
+              <p className="text-sm text-stone-600">Inga personer matchar filtret ännu.</p>
+              <p className="text-xs text-stone-500 mt-1">Sätt befattning i Personal, till exempel Lärare eller Samverkare/resurs.</p>
+              <button type="button" onClick={() => onOpenView('staff')} className="mt-4 px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition">
+                Öppna Personal
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {activeTab === 'positions' && (
         <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
           <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
             <div>
               <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Läser från Uppdrag</p>
-              <h3 className="display-font text-2xl text-stone-800">Schemapositioner · {activeDayLabel}</h3>
+              <h3 className="display-font text-2xl text-stone-800">Lektioner & uppdrag · {activeDayLabel}</h3>
             </div>
             <button type="button" onClick={() => onOpenTasksDay(activeDay)} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
               <Briefcase size={14} />Redigera i Uppdrag
             </button>
           </div>
+          <div className="mb-4 rounded-xl bg-amber-50 ring-1 ring-amber-200 p-4 text-sm text-amber-950">
+            <p style={{ fontWeight: 600 }}>Samma uppdrag, bara skolvy</p>
+            <p className="mt-1 text-amber-900">
+              Det du ser här är samma saker som i appens Uppdrag-del: lektioner, rastvärd, pedagogisk lunch, studiestöd, möten och annat som kan behöva täckas. Skola filtrerar och visar dem på ett sätt som passar lärarschemat.
+            </p>
+          </div>
           <div className="mb-4 rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
             <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
               <div>
                 <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Snabbtillägg</p>
-                <p className="text-sm text-stone-600">Lägg en skolposition direkt här. Den sparas som ett vanligt uppdrag och syns i Drift.</p>
+                <p className="text-sm text-stone-600">Lägg en lektion eller ett uppdrag direkt här. Det sparas som ett vanligt uppdrag och syns i Drift.</p>
               </div>
               {quickError && <span className="text-xs text-rose-700 bg-rose-50 ring-1 ring-rose-200 rounded-full px-2 py-1">{quickError}</span>}
             </div>
@@ -5049,7 +5370,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
               </div>
               <button type="button" onClick={submitQuickPosition}
                 className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
-                <Plus size={14} />Lägg skolposition
+                <Plus size={14} />Lägg lektion/uppdrag
               </button>
             </div>
           </div>
@@ -5111,7 +5432,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
           ) : (
             <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-6 text-center">
               <BookOpen size={24} className="mx-auto text-stone-300 mb-2" />
-              <p className="text-sm text-stone-600">Inga skolpositioner hittades för {activeDayLabel.toLowerCase()}.</p>
+              <p className="text-sm text-stone-600">Inga lektioner eller uppdrag hittades för {activeDayLabel.toLowerCase()}.</p>
               <p className="text-xs text-stone-500 mt-1">Lägg lektion, studiestöd, rastvärd, pedagogisk lunch eller möte i Uppdrag så dyker det upp här.</p>
               <button type="button" onClick={() => onOpenTasksDay(activeDay)} className="mt-4 px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition">
                 Lägg i Uppdrag
@@ -10968,14 +11289,34 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 function WhatsNewModal({ onClose }) {
   const updates = [
     {
+      version: 'v79',
+      title: 'Tydligare språk i Skola',
+      body: 'Skolans uppdragsflik heter nu Lektioner & uppdrag och förklarar att den visar samma uppdrag som Uppdrag-delen, fast filtrerat för skolan.',
+    },
+    {
+      version: 'v78',
+      title: 'Smartare sidfot',
+      body: 'Den gamla generator-texten i sidfoten har ersatts med hjälptext som följer aktuellt rum, till exempel Skola, Drift, Uppdrag eller befintligt schema.',
+    },
+    {
+      version: 'v77',
+      title: 'Första byggläget för lärarschema',
+      body: 'Skola har fått fliken Bygg schema där du väljer person och dag, ser ramtid på en tidslinje och lägger skolblock som lektion, möte eller studiestöd direkt.',
+    },
+    {
+      version: 'v76',
+      title: 'Lärarschema i Skola',
+      body: 'Skola har fått en veckoöversikt som visar ramtider, lektioner och uppdrag per person, så lärarschemat kan granskas utan att öppna varje person för sig.',
+    },
+    {
       version: 'v75',
       title: 'Personalrutan har fått arbetsflikar',
       body: 'Grunduppgifter, befintligt schema och pusselregler ligger nu var för sig så nya personer med färdigt schema går snabbare att lägga in.',
     },
     {
       version: 'v74',
-      title: 'Snabbtillägg för skolpositioner',
-      body: 'I Skola kan lektioner, rastvärd, studiestöd och liknande läggas in som schemapositioner som Drift sedan kan analysera vid frånvaro.',
+      title: 'Snabbtillägg för lektioner och uppdrag',
+      body: 'I Skola kan lektioner, rastvärd, studiestöd och liknande läggas in som vanliga uppdrag som Drift sedan kan analysera vid frånvaro.',
     },
     {
       version: 'v73',
