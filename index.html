@@ -3234,6 +3234,7 @@ function FritidsSchemaApp() {
   // så den nollställs vid ny session — men då fortsätter Spara att fungera (faller tillbaka till nedladdning).
   const [fileHandle, setFileHandle] = useState(null);
   const [showWelcome, setShowWelcome] = useState(false);
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
   const [storageLoadError, setStorageLoadError] = useState(false);
   const [showExamplePicker, setShowExamplePicker] = useState(false);
   const [tourStep, setTourStep] = useState(null); // null = ingen tur aktiv, annars 0..5
@@ -3378,7 +3379,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 22,
+    version: 23,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3975,7 +3976,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v74</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v75</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4177,6 +4178,16 @@ function FritidsSchemaApp() {
           </div>
         </div>
       </div>
+
+      <button type="button" onClick={() => setShowWhatsNew(true)}
+        className="fixed right-5 bottom-5 z-40 rounded-full bg-stone-900 text-white shadow-xl px-4 py-2 text-sm flex items-center gap-2 hover:bg-stone-800 transition screen-only"
+        title="Visa en kort utvecklingslogg">
+        <Sparkles size={15} />Nytt i appen
+      </button>
+
+      {showWhatsNew && (
+        <WhatsNewModal onClose={() => setShowWhatsNew(false)} />
+      )}
 
       {editingId !== null && (
         <StaffEditModal staff={staff.find(s => s.id === editingId)}
@@ -8398,6 +8409,7 @@ function RulesView({ blocks, setBlocks, departments, staff, passBank, fridayCycl
           <div>
             <h2 className="display-font text-xl text-stone-800">Bemanningskrav</h2>
             <p className="text-sm text-stone-500 mt-0.5">Definiera gemensamma block och avdelningsblock. Olika avdelningar kan starta olika tider, och öppning/stängning kan styras mer exakt med maxantal.</p>
+            <p className="text-xs text-stone-500 mt-2">Om du arbetar med ett redan färdigt schema kan du oftast lämna detta enklare. Använd bemanningskrav när appen ska pussla nytt, hitta luckor eller kontrollera att täckningen räcker.</p>
           </div>
           <div className="flex gap-2 flex-wrap">
             <button onClick={() => setWizardOpen(true)}
@@ -9754,6 +9766,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
   const [form, setForm] = useState(() => {
     return normalizePerson(JSON.parse(JSON.stringify(staff)), fridayCycleWeeks);
   });
+  const [staffEditTab, setStaffEditTab] = useState('basic');
   const wm = weeklyMinutes(form, fridayCycleWeeks, fridayTemplateRotation);
   const targetMin = getTargetMin(form);
   const diff = wm - targetMin;
@@ -9985,6 +9998,23 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
         </div>
 
         <div className="p-6 space-y-6">
+          <div className="sticky top-0 z-10 -mx-1 bg-white/95 backdrop-blur border-b border-stone-100 pb-3">
+            <div className="flex gap-1 p-1 bg-stone-100 rounded-xl">
+              {[
+                { key: 'basic', label: 'Grund', hint: 'Namn, befattning och tjänst' },
+                { key: 'schedule', label: 'Befintligt schema', hint: 'Skriv in tider direkt' },
+                { key: 'rules', label: 'Pusselregler', hint: 'Generator och fredagar' },
+              ].map(tab => (
+                <button key={tab.key} type="button" onClick={() => setStaffEditTab(tab.key)}
+                  className={`flex-1 px-3 py-2 rounded-lg text-left transition ${staffEditTab === tab.key ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-200' : 'text-stone-600 hover:bg-stone-50'}`}>
+                  <span className="block text-sm" style={{ fontWeight: 500 }}>{tab.label}</span>
+                  <span className="block text-[10px] opacity-70 mt-0.5">{tab.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className={staffEditTab === 'basic' ? 'space-y-6' : 'hidden'}>
           {/* Grunduppgifter */}
           <Section title="Grunduppgifter">
             <div className="grid grid-cols-2 gap-4">
@@ -10033,6 +10063,9 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
             </div>
           </Section>
 
+          </div>
+
+          <div className={staffEditTab === 'rules' ? 'space-y-6' : 'hidden'}>
           <Section title="Regler och pass">
             <p className="text-xs text-stone-500 mb-3">
               Det här är kärnan i generatorn: vilka pass personen får ta och vilka tider som måste respekteras.
@@ -10386,13 +10419,16 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
             )}
           </Section>
 
-          <Section title="Manuell veckoredigering">
-            <details className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
+          </div>
+
+          <div className={staffEditTab === 'schedule' ? 'space-y-6' : 'hidden'}>
+          <Section title="Befintligt schema">
+            <details open className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
               <summary className="cursor-pointer text-sm text-stone-700" style={{ fontWeight: 500 }}>
-                Öppna aktuella vardagspass
+                Aktuella vardagspass
               </summary>
               <p className="text-xs text-stone-500 mt-3 mb-3">
-                Använd det här när du vill finjustera enskilda dagar efter att schemaförslag har tagits fram. Om tider saknas kan appen först fylla dem från passbank och regler.
+                Använd det här när du redan har ett schema och vill slå in personens start- och sluttider direkt. Om tider saknas kan appen först fylla dem från passbank och regler.
               </p>
               <p className="text-[11px] text-stone-500 mb-3">
                 Tidsetiketterna här visar arbetstid efter rastregeln. Själva passet ligger fortfarande mellan vald start- och sluttid.
@@ -10491,6 +10527,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
               </div>
             </details>
           </Section>
+          </div>
 
           {/* Veckosumma */}
           <div className={`rounded-lg p-4 flex items-center justify-between ${off ? 'bg-orange-50 ring-1 ring-orange-200' : 'bg-emerald-50 ring-1 ring-emerald-200'}`}>
@@ -10926,7 +10963,67 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
   );
 }
 
-// -------- Welcome Modal & Tour --------
+// -------- What's New / Welcome Modal & Tour --------
+
+function WhatsNewModal({ onClose }) {
+  const updates = [
+    {
+      version: 'v75',
+      title: 'Personalrutan har fått arbetsflikar',
+      body: 'Grunduppgifter, befintligt schema och pusselregler ligger nu var för sig så nya personer med färdigt schema går snabbare att lägga in.',
+    },
+    {
+      version: 'v74',
+      title: 'Snabbtillägg för skolpositioner',
+      body: 'I Skola kan lektioner, rastvärd, studiestöd och liknande läggas in som schemapositioner som Drift sedan kan analysera vid frånvaro.',
+    },
+    {
+      version: 'v73',
+      title: 'Drift kan filtrera på befattning',
+      body: 'Driftvyn kan visa alla, skolpersonal, lärare, fritids eller stödfunktioner utan att ersättarförslagen begränsas i onödan.',
+    },
+    {
+      version: 'v71',
+      title: 'Befattning på personal',
+      body: 'Personal kan markeras som lärare i fritidshem, lärare, vikarie, extra resurs, samverkare med mera.',
+    },
+    {
+      version: 'v68',
+      title: 'Nytt startsätt',
+      body: 'Appen fick Hem och Skola som egna rum så fritidsschema, uppdrag och skolbemanning blir lättare att hitta i.',
+    },
+  ];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28, 25, 23, 0.5)' }}>
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden">
+        <div className="px-6 py-5 border-b border-stone-200 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-widest text-stone-500 mb-1">Utvecklingslogg</p>
+            <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.02em' }}>Nytt i appen</h2>
+            <p className="text-sm text-stone-600 mt-2">En kort kom-ihåg-lista över saker vi byggt in under prototypfasen.</p>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-700"><X size={20} /></button>
+        </div>
+        <div className="px-6 py-5 space-y-3 max-h-[70vh] overflow-y-auto">
+          {updates.map(update => (
+            <div key={update.version} className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] uppercase tracking-wider bg-stone-800 text-white rounded-full px-2 py-0.5">{update.version}</span>
+                <h3 className="text-sm text-stone-800" style={{ fontWeight: 600 }}>{update.title}</h3>
+              </div>
+              <p className="text-sm text-stone-600 mt-2 leading-relaxed">{update.body}</p>
+            </div>
+          ))}
+        </div>
+        <div className="px-6 py-4 border-t border-stone-200 bg-stone-50 flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg bg-stone-800 text-white hover:bg-stone-900 transition">
+            Stäng
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function WelcomeModal({ onClose, onStartTour, onApplyMode, currentMode }) {
   const [selectedMode, setSelectedMode] = useState(normalizeWorkflowMode(currentMode));
