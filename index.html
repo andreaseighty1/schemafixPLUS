@@ -3612,7 +3612,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 51,
+    version: 52,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4349,7 +4349,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v106</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v107</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -9451,6 +9451,7 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                           const left = pctFromMin(segment.start);
                           const width = Math.max(1.5, pctFromMin(segment.end) - pctFromMin(segment.start));
                           const isFritids = segment.kind === 'fritids';
+                          const segmentMeta = getAssignmentTypeMeta(isFritids ? 'fritids' : 'school');
                           return (
                             <div
                               key={`${person.id}-${idx}-${segment.kind}-${segment.start}`}
@@ -9458,13 +9459,13 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                               style={{
                                 left: `${left}%`,
                                 width: `${width}%`,
-                                backgroundColor: isFritids ? 'rgba(15, 118, 110, 0.16)' : 'rgba(71, 85, 105, 0.08)',
-                                border: isFritids ? '1px solid rgba(15, 118, 110, 0.18)' : '1px dashed rgba(71, 85, 105, 0.16)',
+                                backgroundColor: `${segmentMeta.color}18`,
+                                border: `${isFritids ? '1px solid' : '1px dashed'} ${segmentMeta.color}40`,
                               }}
                               title={`${segment.label} ${minToTime(segment.start)}–${minToTime(segment.end)}`}
                             >
                               {width > 8 && (
-                                <span className={`px-1.5 text-[10px] truncate ${isFritids ? 'text-teal-800' : 'text-slate-600'}`}>{segment.label}</span>
+                                <span className="px-1.5 text-[10px] truncate" style={{ color: segmentMeta.color }}>{segment.label}</span>
                               )}
                             </div>
                           );
@@ -13902,6 +13903,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v107',
+      title: 'Rätt färg på skoldel i Uppdrag',
+      body: 'De automatiska Skoldel-blocken i Uppdrag använder nu färgen från Schemafärger för Skoldel i stället för att visuellt kopplas till fritidsavdelningens färg.',
+    },
     {
       version: 'v106',
       title: 'Uppdrag visar inte fritidsblock för skolpersonal',
