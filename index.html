@@ -6897,14 +6897,14 @@ function PersonalScheduleView({
                                 ? 'inset 0 0 0 2px #F59E0B, 0 2px 8px rgba(245,158,11,0.18)'
                                 : `inset 4px 0 0 ${visual.borderColor}, 0 1px 3px rgba(28,25,23,0.10)`,
                             }}>
-                            {/* Övre drag-kant: justera starttid */}
+                            {/* Övre drag-kant: justera starttid. Osynlig — cursor-ns-resize signalerar funktionen. */}
                             <span role="button" aria-label="Dra starttid" tabIndex={0}
                               onPointerDown={(event) => startTaskDrag(event, task, d.key, 'start')}
-                              className={`absolute left-0 right-0 top-0 ${handleHeight} cursor-ns-resize bg-white/40 hover:bg-white/80 border-b border-white/60 z-10`} />
+                              className={`absolute left-0 right-0 top-0 ${handleHeight} cursor-ns-resize z-10`} />
                             {/* Undre drag-kant: justera sluttid */}
                             <span role="button" aria-label="Dra sluttid" tabIndex={0}
                               onPointerDown={(event) => startTaskDrag(event, task, d.key, 'end')}
-                              className={`absolute left-0 right-0 bottom-0 ${handleHeight} cursor-ns-resize bg-white/40 hover:bg-white/80 border-t border-white/60 z-10`} />
+                              className={`absolute left-0 right-0 bottom-0 ${handleHeight} cursor-ns-resize z-10`} />
                             {/* Innehåll — wrapper med overflow-hidden så texten inte läcker ut, blocket självt är overflow-visible för popupen. */}
                             <div className="absolute inset-0 overflow-hidden rounded-md pointer-events-none flex flex-col justify-center px-1.5">
                               {isTiny ? (
