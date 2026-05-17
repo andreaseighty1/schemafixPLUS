@@ -6887,7 +6887,7 @@ function PersonalScheduleView({
                           <div key={task.id}
                             onPointerDown={(event) => startTaskDrag(event, task, d.key, 'move')}
                             title={hasCollision ? `Överlappar ${collisionCount} annat block` : `${task.label || meta.label} · ${minToTime(visualStart)}-${minToTime(visualEnd)}`}
-                            className={`group absolute rounded-md ring-1 hover:shadow-md transition touch-none cursor-grab active:cursor-grabbing ${preview ? 'z-20 shadow-lg' : 'z-10'} ${preview?.copy ? 'opacity-90' : ''}`}
+                            className={`group absolute rounded-md ring-1 hover:shadow-md hover:z-30 transition touch-none cursor-grab active:cursor-grabbing ${preview ? 'z-20 shadow-lg' : 'z-10'} ${preview?.copy ? 'opacity-90' : ''}`}
                             style={{
                               ...toBlockStyle(visualStart, visualEnd, renderDayIdx),
                               borderColor: hasCollision ? '#F59E0B' : visual.borderColor,
