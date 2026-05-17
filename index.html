@@ -518,29 +518,25 @@ const WORKFLOW_MODE_EXISTING = 'existing';
 const APP_NAV_ITEMS = [
   // Start
   { k: 'home',     label: 'Hem',         icon: Home,        group: 'start' },
-  // Fritids
-  { k: 'tasks',    label: 'Uppdrag',     icon: Briefcase,   group: 'fritids' },
-  { k: 'drift',    label: 'Drift',       icon: AlertCircle, group: 'fritids' },
-  // Skola
-  { k: 'school',   label: 'Skola',       icon: School,      group: 'school' },
-  // Resurser
-  { k: 'staff',    label: 'Personal',    icon: Users,       group: 'resources' },
-  { k: 'personalSchedule', label: 'Personligt schema', icon: GraduationCap, group: 'resources' },
-  { k: 'passbank', label: 'Passbank',    icon: Layers,      group: 'resources' },
-  { k: 'friday',   label: 'Fredagsrull', icon: Repeat,      group: 'resources' },
-  // Regler & struktur
-  { k: 'rules',    label: 'Bemanning',   icon: Clock,       group: 'rules' },
-  { k: 'settings', label: 'Inställningar', icon: Settings,  group: 'rules' },
-  // Verktyg (kraftfulla saker man når på behov, snarare än flikar man bor i)
+  // Scheman & uppdrag: dagligt arbete med schema, uppdrag och frånvaro.
+  { k: 'drift',    label: 'Drift',       icon: AlertCircle, group: 'work' },
+  { k: 'personalSchedule', label: 'Personligt schema', icon: GraduationCap, group: 'work' },
+  { k: 'tasks',    label: 'Uppdrag',     icon: Briefcase,   group: 'work' },
+  // Organisation: grunddata och skolans struktur.
+  { k: 'staff',    label: 'Personal',    icon: Users,       group: 'org' },
+  { k: 'school',   label: 'Skola',       icon: School,      group: 'org' },
+  // Verktyg: kraftfulla eller mer sällan använda delar.
   { k: 'schedule', label: 'Schemagenerator', icon: Wand2,   group: 'tools' },
+  { k: 'rules',    label: 'Bemanning',   icon: Clock,       group: 'tools' },
+  { k: 'passbank', label: 'Passbank',    icon: Layers,      group: 'tools' },
+  { k: 'friday',   label: 'Fredagsrull', icon: Repeat,      group: 'tools' },
+  { k: 'settings', label: 'Inställningar', icon: Settings,  group: 'tools' },
 ];
 const APP_NAV_GROUPS = [
-  { id: 'start',     label: 'Start' },
-  { id: 'fritids',   label: 'Fritids' },
-  { id: 'school',    label: 'Skola' },
-  { id: 'resources', label: 'Resurser' },
-  { id: 'rules',     label: 'Regler & struktur' },
-  { id: 'tools',     label: 'Verktyg' },
+  { id: 'start', label: 'Start' },
+  { id: 'work',  label: 'Scheman & uppdrag' },
+  { id: 'org',   label: 'Organisation' },
+  { id: 'tools', label: 'Verktyg' },
 ];
 
 function normalizeWorkflowMode(mode) {
@@ -554,10 +550,10 @@ function getWorkflowModeMeta(mode) {
       id: WORKFLOW_MODE_EXISTING,
       label: 'Jag har redan ett schema',
       shortLabel: 'Befintligt schema',
-      description: 'Lägg in personalen och skriv eller justera arbetspass direkt i Vecka. Generatorn blir då ett valfritt extra verktyg i stället för startpunkten.',
+      description: 'Lägg in personalen och bygg arbetspass direkt i Personligt schema. Generatorn blir då ett valfritt verktyg i stället för startpunkten.',
       steps: [
         'Lägg in personal och grunduppgifter i Personal.',
-        'Skriv in eller justera passen direkt i Vecka.',
+        'Skriv in eller importera passen direkt i Personligt schema.',
         'Fortsätt sedan till Uppdrag och Drift.',
       ],
     };
@@ -570,7 +566,7 @@ function getWorkflowModeMeta(mode) {
     steps: [
       'Ställ in avdelningar och passbank, definiera fredagscykeln.',
       'Lägg in personal och bemanningskrav.',
-      'Låt appen generera schemaförslag och justera i Vecka. Lägg på Uppdrag och använd Drift vid frånvaro.',
+      'Låt appen generera schemaförslag och justera sedan i Personligt schema. Lägg på Uppdrag och använd Drift vid frånvaro.',
     ],
   };
 }
@@ -608,17 +604,17 @@ function getWorkflowTour(mode) {
 function getTabHelpText(tabKey, workflowMode) {
   const mode = normalizeWorkflowMode(workflowMode);
   const map = {
-    home: 'Startplatsen som guidar dig till rätt rum: uppdrag, drift, skola, personligt schema eller import/export.',
+    home: 'Startpanel med driftläge, snabbvägar och plats för kommande kalendarie.',
     school: 'Här samlar vi lärarnas ramtider, undervisningspositioner, grupper och källstöd.',
     schedule: mode === WORKFLOW_MODE_EXISTING
-      ? 'Schemagenerator — valfritt verktyg. Här kan du pussla ett nytt schemaförslag att jämföra med ditt befintliga.'
-      : 'Schemagenerator — låt appen pussla fram schemaförslag utifrån personal, bemanningskrav och passbank.',
+      ? 'Schemagenerator — valfritt fritidsverktyg. Här kan du pussla ett nytt personalschema att jämföra med ditt befintliga.'
+      : 'Schemagenerator — hjälper dig bygga personalschema för fritidshemmet utifrån personal, bemanningskrav och passbank.',
     staff: 'Här lägger du in personal, tjänstgöring, roller, fredagsrutin och viktiga regler.',
-    personalSchedule: 'Bygg ett personligt veckoschema för en specifik person genom att dra uppdragsblock på en tidslinje. Sparas som vanliga uppdrag och syns i Drift.',
-    tasks: 'Här lägger du uppdrag ovanpå grundschemat, som lektioner, rastvärd, öppning och stängning.',
+    personalSchedule: 'Bygg och granska en persons vecka. Samma block kan sedan finjusteras i Uppdrag och analyseras i Drift.',
+    tasks: 'Uppdragslagret styr hur varje block beter sig vid frånvaro: måste täckas, kan släppas och föreslagen ersättare.',
     drift: 'Här markerar du frånvaro och ser direkt vad som faller bort och behöver täckas.',
     rules: 'Här lägger du bemanningskrav över dagen, gemensamt eller per avdelning.',
-    passbank: 'Passen som generatorn får använda på vardagar. Ändringar slår igenom i Vecka, Generator och Drift.',
+    passbank: 'Passen som generatorn får använda på vardagar. Ändringar hjälper Schemageneratorn och vägs in i Drift.',
     friday: 'Fredagscykelns mall och varje persons rotation. Bygg en central mall och låt personerna välja startvecka.',
     settings: 'Här hittar du avdelningar, arbetsflöde, import/export och exempelscenarier.',
   };
@@ -3378,12 +3374,13 @@ function FritidsSchemaApp() {
   const footerHint = useMemo(() => {
     if (view === 'school') return 'Skola använder samma personal, uppdrag och Drift. Bygg lärarschema med block som sedan kan analyseras vid frånvaro.';
     if (view === 'drift') return 'Drift är för dagens och närmaste tidens frånvaro. Den analyserar avvikelser och föreslår lösningar utan att skriva om grundschemat.';
-    if (view === 'tasks') return 'Uppdrag beskriver det som måste täckas: lektioner, rastvärd, pedagogisk lunch, öppning, stängning och fasta tider.';
+    if (view === 'tasks') return 'Uppdrag är regel-lagret för schemablock: här styr du vad som måste täckas vid frånvaro, vad som kan släppas och vem som bör ersätta.';
+    if (view === 'personalSchedule') return 'Personligt schema visar samma uppdragsblock person för person. Uppdrag styr hur blocken beter sig vid frånvaro.';
     if (view === 'staff') return 'Personal styr roller, ramtider, befintliga scheman och pusselregler. Klicka på en person för att redigera.';
     if (view === 'schedule') {
       return workflowMode === WORKFLOW_MODE_EXISTING
-        ? 'Vecka visar ditt befintliga schema. Klicka på en person för att justera tider utan att behöva generera nytt.'
-        : 'Klicka på en person för att redigera detaljer. Tryck "Generera schemaförslag" när appen ska pussla fram alternativ.';
+        ? 'Schemagenerator är ett valfritt verktyg för att jämföra med ett befintligt fritidsschema.'
+        : 'Schemageneratorn hjälper dig bygga personalschema för fritidshemmet utifrån personal, passbank och bemanningskrav.';
     }
     if (view === 'rules') return 'Bemanning används främst när appen ska pussla schema, hitta luckor eller kontrollera att täckningen räcker.';
     if (view === 'passbank') return 'Passbanken beskriver vilka arbetspass generatorn kan använda och vilka dagar passen får ligga på.';
@@ -3531,7 +3528,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 42,
+    version: 43,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4215,7 +4212,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v97</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v98</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4255,7 +4252,7 @@ function FritidsSchemaApp() {
         <div className="flex-1 min-w-0 flex flex-col">
           <header className="bg-white border-b border-stone-200 px-6 py-3 flex items-center justify-between gap-3 flex-wrap sticky top-0 z-30">
             <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-widest text-stone-400">{view === 'home' ? 'SchemaFIX · start' : view === 'school' ? 'Skola · planeringsstöd' : 'Fritidshem · schemaverktyg'}</p>
+              <p className="text-[10px] uppercase tracking-widest text-stone-400">{view === 'home' ? 'SchemaFIX · startpanel' : view === 'school' ? 'Skola · planeringsstöd' : view === 'schedule' ? 'Verktyg · fritidsgenerator' : 'SchemaFIX · schemaportal'}</p>
               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                 <h2 className="display-font text-2xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>{(APP_NAV_ITEMS.find(i => i.k === view) || {}).label || 'SchemaFIX'}</h2>
                 {dirty && (
@@ -4817,7 +4814,7 @@ function WorkflowModePanel({ workflowMode, onChangeMode, onOpenView, onOpenFile,
             {isExisting ? (
               <>
                 <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Personal</button>
-                <button type="button" onClick={() => onOpenView('schedule')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Öppna Vecka</button>
+                <button type="button" onClick={() => onOpenView('personalSchedule')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Öppna personligt schema</button>
                 <button type="button" onClick={() => onOpenView('tasks')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Uppdrag</button>
                 <button type="button" onClick={onOpenFile} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Öppna schemafil</button>
               </>
@@ -4827,16 +4824,16 @@ function WorkflowModePanel({ workflowMode, onChangeMode, onOpenView, onOpenFile,
                 <button type="button" onClick={() => onOpenView('friday')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Fredagsrull</button>
                 <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Personal</button>
                 <button type="button" onClick={() => onOpenView('rules')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Gå till Bemanning</button>
-                <button type="button" onClick={() => onOpenView('schedule')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Öppna Vecka</button>
+                <button type="button" onClick={() => onOpenView('schedule')} className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition">Öppna Schemagenerator</button>
               </>
             )}
           </div>
           <p className="text-xs text-stone-500 mt-3">
             {isExisting
               ? (staffCount > 0
-                  ? 'Du kan redan nu hoppa till Vecka och skriva eller justera pass direkt.'
-                  : 'Börja med att lägga in personalen. Därefter kan du skriva passen direkt i Vecka.')
-              : 'När grunderna är på plats kan du låta appen pussla fram förslag och sedan finjustera dem i Vecka.'}
+                  ? 'Du kan redan nu hoppa till Personligt schema och skriva, importera eller justera pass direkt.'
+                  : 'Börja med att lägga in personalen. Därefter kan du skriva eller importera passen i Personligt schema.')
+              : 'När grunderna är på plats kan du låta appen pussla fram förslag och sedan finjustera dem i Personligt schema och Uppdrag.'}
           </p>
         </div>
       </div>
@@ -4854,13 +4851,31 @@ function countAssignmentRecords(value) {
 function HomeView({ staff, departments, assignments, driftState, fridayCycleWeeks, workflowMode, onOpenView, onOpenFile }) {
   const assignmentCount = useMemo(() => countAssignmentRecords(assignments), [assignments]);
   const templateCount = useMemo(() => Object.keys(normalizeDriftTemplates(driftState?.templates || {}, staff, fridayCycleWeeks)).length, [driftState?.templates, staff, fridayCycleWeeks]);
+  const todayDateKey = formatDateKey(new Date());
+  const todayDayKey = getDayKeyForDate(new Date());
+  const todayAbsences = useMemo(
+    () => readDriftDayBucket(driftState?.absences, todayDayKey, 1, fridayCycleWeeks, todayDateKey) || [],
+    [driftState?.absences, todayDayKey, todayDateKey, fridayCycleWeeks]
+  );
+  const todayAbsentNames = todayAbsences
+    .map(id => staff.find(person => String(person.id) === String(id))?.name)
+    .filter(Boolean);
   const modeMeta = getWorkflowModeMeta(workflowMode);
   const rooms = [
     {
+      key: 'drift',
+      label: 'Drift',
+      eyebrow: 'Lös frånvaro och bemanning',
+      desc: 'Markera frånvaro, se vad som faller bort och använd sparade lösningar när samma problem återkommer.',
+      icon: AlertCircle,
+      tone: 'bg-[#5C8A5E] text-white',
+      action: 'Öppna drift',
+    },
+    {
       key: 'personalSchedule',
       label: 'Personligt schema',
-      eyebrow: 'Bygg en persons vecka',
-      desc: 'Lägg in arbetspass och uppdrag för en person i taget — dra block på en tidslinje precis som ett vanligt schema.',
+      eyebrow: 'Personens vecka',
+      desc: 'Bygg eller importera arbetspass och uppdrag person för person. Samma block syns sedan i Uppdrag och Drift.',
       icon: GraduationCap,
       tone: 'bg-[#D97757] text-white',
       action: 'Öppna personligt schema',
@@ -4868,20 +4883,11 @@ function HomeView({ staff, departments, assignments, driftState, fridayCycleWeek
     {
       key: 'tasks',
       label: 'Uppdrag',
-      eyebrow: 'Det som måste täckas',
-      desc: 'Lägg på lektioner, rastvärd, pedagogisk lunch, studiestöd, öppning, stängning och fasta tider.',
+      eyebrow: 'Regler för varje block',
+      desc: 'Finjustera om block måste täckas vid frånvaro, kan släppas, eller har en förstahandsersättare.',
       icon: Briefcase,
       tone: 'bg-[#3D7A8C] text-white',
       action: 'Öppna uppdrag',
-    },
-    {
-      key: 'drift',
-      label: 'Drift',
-      eyebrow: 'Idag och närmaste månaden',
-      desc: 'Markera frånvaro, se vad som faller bort och använd sparade lösningar när samma problem återkommer.',
-      icon: AlertCircle,
-      tone: 'bg-[#5C8A5E] text-white',
-      action: 'Öppna drift',
     },
     {
       key: 'school',
@@ -4899,10 +4905,10 @@ function HomeView({ staff, departments, assignments, driftState, fridayCycleWeek
       <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="max-w-3xl">
-            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Välj rum</p>
-            <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>Vad vill du göra nu?</h2>
+            <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Startpanel</p>
+            <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>Vad behöver lösas nu?</h2>
             <p className="text-sm text-stone-600 mt-2">
-              SchemaFIX delar nu upp arbetet i tydliga rum. Personligt schema, Uppdrag, Drift och Skola är egna arbetsytor — och Schemagenerator ligger under Verktyg när du vill pussla nytt.
+              SchemaFIX samlar schema, uppdrag, drift och skola på ett ställe. Hem ska bli anslagstavlan: dagens driftläge, kommande kalendarie och snabbvägar till rätt arbetsyta.
             </p>
           </div>
           <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 px-4 py-3 min-w-[220px]">
@@ -4911,6 +4917,41 @@ function HomeView({ staff, departments, assignments, driftState, fridayCycleWeek
             <button type="button" onClick={() => onOpenView('settings')} className="mt-2 text-xs text-stone-600 hover:text-stone-900 underline">
               Ändra i Inställningar
             </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1.15fr,0.85fr] gap-4">
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Idag</p>
+              <h3 className="display-font text-2xl text-stone-800">Driftläge</h3>
+              <p className="text-sm text-stone-600 mt-1">
+                {todayAbsentNames.length > 0
+                  ? `${todayAbsentNames.length} markerad frånvaro idag: ${todayAbsentNames.join(', ')}.`
+                  : 'Ingen frånvaro är markerad för idag i Drift.'}
+              </p>
+            </div>
+            <button type="button" onClick={() => onOpenView('drift')} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+              <AlertCircle size={14} />Öppna Drift
+            </button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
+            <MiniStatus label="Frånvaro idag" value={todayAbsences.length} tone={todayAbsences.length ? 'amber' : 'emerald'} />
+            <MiniStatus label="Uppdrag totalt" value={assignmentCount} tone="stone" />
+            <MiniStatus label="Sparade driftmallar" value={templateCount} tone="stone" />
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Kommande</p>
+          <h3 className="display-font text-2xl text-stone-800">Kalendarie</h3>
+          <p className="text-sm text-stone-600 mt-1">
+            Här finns plats för läsårets händelser som påverkar bemanning: studiedagar, lov, badresor, APT, friluftsdagar och andra avvikelser.
+          </p>
+          <div className="mt-4 rounded-xl bg-stone-50 ring-1 ring-stone-200 px-3 py-2 text-xs text-stone-500">
+            Planerat steg: lägga till händelser manuellt först, sedan titta på import och eventuell export/synk till Teams-kalender.
           </div>
         </div>
       </div>
@@ -4933,7 +4974,7 @@ function HomeView({ staff, departments, assignments, driftState, fridayCycleWeek
           <p className="text-xs uppercase tracking-wider text-stone-500 mb-3">Kom igång snabbt</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <QuickLink icon={Users} label="Lägg till eller justera personal" onClick={() => onOpenView('staff')} />
-            <QuickLink icon={Wand2} label="Generera schema (verktyg)" onClick={() => onOpenView('schedule')} />
+            <QuickLink icon={Wand2} label="Schemagenerator för fritids" onClick={() => onOpenView('schedule')} />
             <QuickLink icon={Repeat} label="Öppna fredagsrullen" onClick={() => onOpenView('friday')} />
             <QuickLink icon={Clock} label="Se bemanningsregler" onClick={() => onOpenView('rules')} />
             <QuickLink icon={Upload} label="Öppna sparad JSON" onClick={onOpenFile} />
@@ -4944,13 +4985,27 @@ function HomeView({ staff, departments, assignments, driftState, fridayCycleWeek
         <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
           <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Nästa byggsteg</p>
           <p className="text-sm text-stone-700 leading-relaxed">
-            Skola-rummet är förberett som egen yta. Nästa naturliga steg är att lägga in lärarnas ramtider och sedan koppla undervisningspositioner till Drift.
+            Kalendariet får plats här på Hem utan att vi bygger hela funktionen direkt. När grunden sitter kan händelser kopplas till Drift, schemaimport och eventuellt Teams-kalender längre fram.
           </p>
-          <button type="button" onClick={() => onOpenView('school')} className="mt-4 px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
-            <School size={14} />Fortsätt i Skola
+          <button type="button" onClick={() => onOpenView('personalSchedule')} className="mt-4 px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+            <GraduationCap size={14} />Fortsätt med schema
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function MiniStatus({ label, value, tone = 'stone' }) {
+  const toneClass = tone === 'emerald'
+    ? 'bg-emerald-50 text-emerald-800 ring-emerald-200'
+    : tone === 'amber'
+      ? 'bg-amber-50 text-amber-800 ring-amber-200'
+      : 'bg-stone-50 text-stone-700 ring-stone-200';
+  return (
+    <div className={`rounded-xl ring-1 px-3 py-2 ${toneClass}`}>
+      <p className="text-[10px] uppercase tracking-wider opacity-75">{label}</p>
+      <p className="display-font text-2xl mt-0.5">{value}</p>
     </div>
   );
 }
@@ -7042,7 +7097,7 @@ function PersonalScheduleView({
         <ColorWizardModal onClose={() => setShowColorWizard(false)} />
       )}
       <TabIntro>
-        Bygg en persons hela vecka som ett vertikalt schema — tid neråt, dagarna som kolumner. Dra block för att flytta i tid eller mellan dagar. Dra i över- eller underkanten för att korta/förlänga. Håll <kbd className="px-1 py-0.5 rounded bg-stone-200 text-[10px]">Alt</kbd> medan du drar för att kopiera istället. Allt sparas som vanliga uppdrag och syns automatiskt i Uppdrag, Skola och Drift.
+        Personligt schema visar en persons vecka: arbetspass, lektioner, rastvärd, planering och andra uppdrag. Dra block för att flytta eller justera tid. Samma block finns också i Uppdrag, där du styr vad som måste täckas vid frånvaro och vem som kan vara ersättare.
       </TabIntro>
 
       <div className="flex items-center justify-end gap-3 flex-wrap -mt-3">
@@ -8283,7 +8338,7 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
   return (
     <div className="space-y-4">
       <TabIntro>
-        Schemagenerator — pussla fram ett grundschema utifrån personal, passbank och bemanningskrav. När du har ett förslag (eller har skrivit in tider manuellt) ser du veckan per dag här. Klicka på en stapel för att redigera, växla mellan gemensam bemanning och avdelningar, och skriv ut hela veckan som PDF via knappen uppe till höger.
+        Schemageneratorn är ett verktyg för att bygga personalschema för fritidshemmet. Den pusslar fram grundschema utifrån personal, passbank och bemanningskrav. När grunden sitter fortsätter du i Personligt schema och Uppdrag för att lägga på lektioner, rastvärd, planering och driftregler.
       </TabIntro>
       <GeneratorPrerequisitesBanner
         staffCount={staffCount}
@@ -8898,7 +8953,7 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
         .task-input:focus { border-color: #78716c; box-shadow: 0 0 0 2px rgba(120, 113, 108, 0.1); }
       `}</style>
       <TabIntro>
-        Uppdrag är ett eget lager ovanpå arbetspassen. Här anger du vad personen gör inom sitt pass: fritids, skoldel, lektion, rastvärd, samverkan, rast eller annat bundet uppdrag. Den här fliken påverkar ännu inte generatorn, men bygger underlag för framtida Drift-läge.
+        Uppdrag är regel-lagret bakom schemat. Här ser du samma block som i Personligt schema, men med fokus på frånvaro: vad måste täckas, vad kan släppas, vilken person är förstahandsersättare och vilka block är låsta.
       </TabIntro>
 
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4">
@@ -13605,6 +13660,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v98',
+      title: 'Tydligare rum och startpanel',
+      body: 'Sidomenyn är nu samlad i Start, Scheman & uppdrag, Organisation och Verktyg. Hem har blivit mer av en startpanel med dagens driftläge, plats för kommande kalendarie och tydligare snabbvägar.',
+    },
     {
       version: 'v97',
       title: 'Tydligare schemaimport och OK-diff',
