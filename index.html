@@ -3728,7 +3728,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 55,
+    version: 57,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3972,6 +3972,27 @@ function FritidsSchemaApp() {
       });
       if (!didUpdate) return prev;
       return replaceAssignmentsForDay(prev, target.id, dayKey, nextList, staff, fridayOptions);
+    });
+    return true;
+  };
+  const copyFridayAssignmentsForPerson = ({ personId, fromWeek, toWeek }) => {
+    const target = staff.find(member => String(member.id) === String(personId));
+    const sourceWeek = clamp(asNumber(fromWeek, 1), 1, fridayCycleWeeks);
+    const targetWeek = clamp(asNumber(toWeek, currentFridayWeek), 1, fridayCycleWeeks);
+    if (!target || sourceWeek === targetWeek) return false;
+    const targetFridayOptions = { fridayWeek: targetWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation };
+    if (!getShiftForDay(target, 'fri', targetFridayOptions)) return false;
+    setAssignments(prev => {
+      const sourceTasks = getAssignmentsForDay(prev, target.id, 'fri', {
+        fridayWeek: sourceWeek,
+        cycleWeeks: fridayCycleWeeks,
+        fridayTemplateRotation,
+      });
+      const clonedTasks = sourceTasks.map(task => ({
+        ...task,
+        id: createAssignmentId(),
+      }));
+      return replaceAssignmentsForDay(prev, target.id, 'fri', clonedTasks, staff, targetFridayOptions);
     });
     return true;
   };
@@ -4465,7 +4486,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v113</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v115</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4595,6 +4616,7 @@ function FritidsSchemaApp() {
               onUpdateAssignment={updateSchoolPosition}
               onDeleteAssignment={deleteSchoolPosition}
               onAddAssignment={addSchoolPosition}
+              onCopyFridayAssignments={copyFridayAssignmentsForPerson}
               onImportPersonalSchedule={importPersonalScheduleForPerson}
             />}
             {(view === 'schedule' || view === 'drift') && (
@@ -7251,6 +7273,7 @@ function PersonalScheduleView({
   onUpdateAssignment,
   onDeleteAssignment,
   onAddAssignment,
+  onCopyFridayAssignments,
   onImportPersonalSchedule,
 }) {
   const [selectedPersonId, setSelectedPersonId] = useState('');
@@ -7264,6 +7287,7 @@ function PersonalScheduleView({
   const importInputRef = useRef(null);
   const [dragPreview, setDragPreview] = useState(null);
   const [importBusy, setImportBusy] = useState(false);
+  const [copyFridaySourceWeek, setCopyFridaySourceWeek] = useState(1);
 
   useEffect(() => {
     const onDown = (e) => { if (e.altKey) setAltPressed(true); };
@@ -7291,6 +7315,7 @@ function PersonalScheduleView({
   const person = staff.find(p => String(p.id) === String(selectedPersonId))
     || peopleToShow[0]
     || null;
+  const personUsesFridayRotation = person?.fridayMode === 'rotation';
 
   // Timeline-konstanter — matchar Excel-exporten exakt så att vy och fil ser likadana ut.
   const TIMELINE_START = 6 * 60;   // 06:00
@@ -7322,6 +7347,15 @@ function PersonalScheduleView({
     for (const d of dayDataList) map[d.key] = d;
     return map;
   }, [dayDataList]);
+
+  useEffect(() => {
+    if (!personUsesFridayRotation || fridayCycleWeeks <= 1) return;
+    const fallbackWeek = currentFridayWeek === 1 ? Math.min(2, fridayCycleWeeks) : 1;
+    setCopyFridaySourceWeek(prev => {
+      const clean = clamp(asNumber(prev, fallbackWeek), 1, fridayCycleWeeks);
+      return clean === currentFridayWeek ? fallbackWeek : clean;
+    });
+  }, [person?.id, personUsesFridayRotation, fridayCycleWeeks, currentFridayWeek]);
 
   // Pekarposition → minute (Y) och dagindex (X) inom dag-griden (exklusive tid-spalt).
   const getMinuteFromY = (clientY) => {
@@ -7373,6 +7407,9 @@ function PersonalScheduleView({
       originDayIdx: dayIdx,
       mode,
       copy: !!event.altKey,
+      dragActivated: false,
+      originClientX: event.clientX,
+      originClientY: event.clientY,
       originMinute: getMinuteFromY(event.clientY),
       start: task.start,
       end: task.end,
@@ -7389,6 +7426,8 @@ function PersonalScheduleView({
   useEffect(() => {
     if (!dragPreview) return;
     const updatePreview = (event) => {
+      const movedPx = Math.hypot(event.clientX - dragPreview.originClientX, event.clientY - dragPreview.originClientY);
+      if (!dragPreview.dragActivated && movedPx < 6) return;
       const currentMinute = getMinuteFromY(event.clientY);
       const currentDayIdx = getDayIdxFromX(event.clientX);
       const delta = roundToStep(currentMinute - dragPreview.originMinute);
@@ -7424,6 +7463,7 @@ function PersonalScheduleView({
           previewDayKey: nextDayKey,
           previewDayIdx: nextDayIdx,
           copy: !!event.altKey,
+          dragActivated: true,
         };
         dragPreviewRef.current = next;
         return next;
@@ -7514,10 +7554,13 @@ function PersonalScheduleView({
   // Duplicera direkt via knapp (alternativ till Alt-drag).
   const handleDuplicate = (task, dayKey) => {
     if (!person || !task || !onAddAssignment) return;
-    // Förskjut 5 min så kopian är synligt skild från originalet.
-    const offset = TIMELINE_STEP;
-    const start = Math.min(TIMELINE_END - TIMELINE_STEP, task.start + offset);
-    const end = Math.min(TIMELINE_END, task.end + offset);
+    const duration = Math.max(TIMELINE_STEP, task.end - task.start);
+    const shift = dayDataByKey[dayKey]?.shift;
+    const shiftStart = shift ? timeToMin(shift[0]) : TIMELINE_START;
+    const shiftEnd = shift ? timeToMin(shift[1]) : TIMELINE_END;
+    let start = task.end + duration <= shiftEnd ? task.end : task.start - duration;
+    if (start < shiftStart) start = Math.min(Math.max(shiftStart, task.start + TIMELINE_STEP), Math.max(shiftStart, shiftEnd - duration));
+    const end = Math.min(shiftEnd, start + duration);
     onAddAssignment({
       personId: person.id,
       dayKey,
@@ -7529,6 +7572,36 @@ function PersonalScheduleView({
         durationMinutes: end - start,
       },
     });
+  };
+
+  const handleCopyFridayFromWeek = () => {
+    if (!person || !personUsesFridayRotation || !onCopyFridayAssignments) return;
+    const sourceWeek = clamp(asNumber(copyFridaySourceWeek, 1), 1, fridayCycleWeeks);
+    const targetWeek = clamp(asNumber(currentFridayWeek, 1), 1, fridayCycleWeeks);
+    if (sourceWeek === targetWeek) {
+      alert('Välj en annan fredagsvecka att kopiera från.');
+      return;
+    }
+    const sourceTasks = getAssignmentsForDay(assignments, person.id, 'fri', {
+      fridayWeek: sourceWeek,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    });
+    const currentTasks = getAssignmentsForDay(assignments, person.id, 'fri', {
+      fridayWeek: targetWeek,
+      cycleWeeks: fridayCycleWeeks,
+      fridayTemplateRotation,
+    });
+    if (sourceTasks.length === 0) {
+      alert(`Fredag vecka ${sourceWeek} har inga uppdrag att kopiera.`);
+      return;
+    }
+    const replaceText = currentTasks.length > 0
+      ? `\n\nNuvarande fredag vecka ${targetWeek} har ${currentTasks.length} uppdrag och ersätts.`
+      : '';
+    if (!confirm(`Kopiera ${sourceTasks.length} uppdrag från fredag vecka ${sourceWeek} till vecka ${targetWeek}?${replaceText}`)) return;
+    const ok = onCopyFridayAssignments({ personId: person.id, fromWeek: sourceWeek, toWeek: targetWeek });
+    if (!ok) alert('Kunde inte kopiera fredagen. Kontrollera att personen har arbetspass den valda fredagsveckan.');
   };
 
   const handleDelete = (task, dayKey) => {
@@ -7673,8 +7746,8 @@ function PersonalScheduleView({
             )}
           </div>
 
-          {fridayCycleWeeks > 1 && (
-            <div>
+          {personUsesFridayRotation && fridayCycleWeeks > 1 && (
+            <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
               <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Fredagsvecka</label>
               <select value={currentFridayWeek} onChange={e => setCurrentFridayWeek(parseInt(e.target.value, 10))}
                 className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 tabular-nums">
@@ -7682,7 +7755,24 @@ function PersonalScheduleView({
                   <option key={i + 1} value={i + 1}>Vecka {i + 1} av {fridayCycleWeeks}</option>
                 ))}
               </select>
-              <p className="text-[10px] text-stone-500 mt-1">Påverkar bara fredagsspalten — rullen styr vilken Fredag som visas där.</p>
+              <p className="text-[10px] text-stone-500 mt-1">Påverkar bara fredagsspalten. Personer utan fredagsrull visar sin fasta fredag utan veckoval.</p>
+              <div className="mt-3 pt-3 border-t border-stone-200">
+                <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Kopiera fredag från</label>
+                <div className="flex gap-2">
+                  <select value={copyFridaySourceWeek} onChange={e => setCopyFridaySourceWeek(parseInt(e.target.value, 10))}
+                    className="min-w-0 flex-1 px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 tabular-nums">
+                    {Array.from({ length: fridayCycleWeeks }).map((_, i) => {
+                      const week = i + 1;
+                      return <option key={week} value={week} disabled={week === currentFridayWeek}>Vecka {week}</option>;
+                    })}
+                  </select>
+                  <button type="button" onClick={handleCopyFridayFromWeek}
+                    className="px-3 py-2 rounded-lg text-sm bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition whitespace-nowrap">
+                    Kopiera
+                  </button>
+                </div>
+                <p className="text-[10px] text-stone-500 mt-1">Ersätter uppdragen i den fredagsvecka som visas just nu.</p>
+              </div>
             </div>
           )}
 
@@ -7704,7 +7794,7 @@ function PersonalScheduleView({
         <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
           <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
             <div className="min-w-0">
-              <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Personligt veckoschema{fridayCycleWeeks > 1 ? ` · fredag v${currentFridayWeek}` : ''}</p>
+              <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Personligt veckoschema{personUsesFridayRotation && fridayCycleWeeks > 1 ? ` · fredag v${currentFridayWeek}` : ''}</p>
               <h3 className="display-font text-2xl text-stone-800 truncate">{person ? person.name : 'Välj person'}</h3>
               {person && (
                 <p className="text-sm text-stone-600 mt-1">
@@ -14507,6 +14597,16 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v115',
+      title: 'Smidigare fredagar i Personligt schema',
+      body: 'Fredagsveckoväljaren visas nu bara för personer som faktiskt använder fredagsrull. Där kan du också kopiera uppdragen från en annan fredagsvecka till den vecka som visas.',
+    },
+    {
+      version: 'v114',
+      title: 'Stabilare duplicering i Personligt schema',
+      body: 'Duplicerade block läggs nu tydligare bredvid originalet när det finns plats, och drag börjar först efter en liten pekarrörelse. Det minskar risken att ett block råkar snäppas fem minuter när man bara försöker ta tag i kopian.',
+    },
     {
       version: 'v113',
       title: 'Snabbmallar för planering',
