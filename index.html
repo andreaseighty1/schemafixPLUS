@@ -3612,7 +3612,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 53,
+    version: 54,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4349,7 +4349,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v108</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v109</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -6596,8 +6596,8 @@ function parseImportTimeValue(value) {
     if (value >= 0 && value < 1) return roundToStep(value * 24 * 60);
     if (value >= 0 && value <= 24) return roundToStep(value * 60);
   }
-  const text = normalizeExcelText(value).replace(/[–—]/g, '-').replace(/\./g, ':');
-  const match = text.match(/\b(\d{1,2}):(\d{2})\b/);
+  const text = normalizeExcelText(value).replace(/[–—]/g, '-');
+  const match = text.match(/\b(\d{1,2})[:.](\d{2})\b/);
   if (!match) return null;
   const hours = Number(match[1]);
   const minutes = Number(match[2]);
@@ -6606,8 +6606,8 @@ function parseImportTimeValue(value) {
 }
 
 function parseImportTimeRange(value) {
-  const text = normalizeExcelText(value).replace(/[–—]/g, '-').replace(/\./g, ':');
-  const match = text.match(/\b(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\b/);
+  const text = normalizeExcelText(value).replace(/[–—]/g, '-');
+  const match = text.match(/\b(\d{1,2})[:.](\d{2})\s*(?:-|(?=\d{1,2}[:.]\d{2}))\s*(\d{1,2})(?:[:.-](\d{2}))\b/);
   if (!match) return null;
   const start = Number(match[1]) * 60 + Number(match[2]);
   const end = Number(match[3]) * 60 + Number(match[4]);
@@ -6617,7 +6617,7 @@ function parseImportTimeRange(value) {
 
 function cleanImportLabel(value) {
   return normalizeExcelText(value)
-    .replace(/\b\d{1,2}[:.]\d{2}\s*[-–—]\s*\d{1,2}[:.]\d{2}\b/g, '')
+    .replace(/\b\d{1,2}[:.]\d{2}\s*(?:[-–—]|(?=\d{1,2}[:.]\d{2}))\s*\d{1,2}(?:[:.-]\d{2})\b/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -6663,6 +6663,34 @@ function defaultImportedDuration(type) {
   return 30;
 }
 
+function isIgnorableImportText(value) {
+  const text = foldText(value);
+  return !text || text.includes('arb.tid') || text === 'ledig' || text === 'rullande' || !!getImportDayKey(text);
+}
+
+function isImportMetadataOnlyLabel(value) {
+  const text = foldText(value).replace(/\s+/g, '');
+  if (!text) return true;
+  if (/^s\.?\d+[a-z]?$/.test(text)) return true;       // sal/rum, t.ex. s209 eller s.305
+  if (/^\d+\s*(min)?$/.test(text)) return true;         // längdnotering, t.ex. 50 eller 50min
+  if (/^\d+[a-z]?$/.test(text)) return true;            // lös klass- eller längdrad, t.ex. 6b/70
+  if (/^\d+\.\d+$/.test(text)) return true;             // gruppnotering, t.ex. 6.2
+  if (/^(hagie|haige|linea)$/.test(text)) return true;  // vanliga plats-/personstöd i källschemat
+  return false;
+}
+
+function getImportLabelParts(ws, startRow, endRow, col) {
+  const parts = [];
+  for (let r = startRow; r <= endRow; r += 1) {
+    const raw = getImportCellText(ws, r, col);
+    if (!raw || parseImportTimeRange(raw) || isIgnorableImportText(raw)) continue;
+    const label = cleanImportLabel(raw);
+    if (!label || parseImportTimeValue(label) != null) continue;
+    parts.push({ row: r, label, metadataOnly: isImportMetadataOnlyLabel(label) });
+  }
+  return parts;
+}
+
 function getImportCellText(ws, r, c) {
   const XLSX = window.XLSX;
   const cell = ws[XLSX.utils.encode_cell({ r, c })];
@@ -6695,13 +6723,18 @@ function findNearbyImportTimeRange(ws, row, col, usedRows = new Set()) {
 function findPersonalScheduleHeader(ws, range) {
   for (let r = range.s.r; r <= Math.min(range.e.r, range.s.r + 20); r += 1) {
     const dayCols = {};
+    const dayVariants = {};
     for (let c = range.s.c; c <= range.e.c; c += 1) {
       const dayKey = getImportDayKey(getImportCellText(ws, r, c));
-      if (dayKey && !dayCols[dayKey]) dayCols[dayKey] = c;
+      if (dayKey) {
+        if (!dayVariants[dayKey]) dayVariants[dayKey] = [];
+        dayVariants[dayKey].push({ col: c, label: getImportCellText(ws, r, c) || getDayMeta(dayKey).label });
+        if (!dayCols[dayKey]) dayCols[dayKey] = c;
+      }
     }
     if (Object.keys(dayCols).length >= 3) {
       const firstDayCol = Math.min(...Object.values(dayCols));
-      return { row: r, dayCols, timeCol: Math.max(range.s.c, firstDayCol - 1) };
+      return { row: r, dayCols, dayVariants, timeCol: Math.max(range.s.c, firstDayCol - 1) };
     }
   }
   return null;
@@ -6757,6 +6790,99 @@ function findImportStopRow(ws, range, headerRow) {
   return range.e.r;
 }
 
+function parsePersonalScheduleImportDay(ws, range, header, stopRow, day, variant, rowToMinute, file) {
+  const col = variant.col;
+  const dayResult = { shift: null, tasks: [] };
+  const warnings = [];
+  let ignoredMetadataRows = 0;
+  let ignoredTextRows = 0;
+  const entries = [];
+  let lastRangeRow = header.row;
+
+  for (let r = header.row + 1; r <= stopRow; r += 1) {
+    const raw = getImportCellText(ws, r, col);
+    const text = normalizeExcelText(raw);
+    if (!text) continue;
+    if (isIgnorableImportText(text)) continue;
+
+    const explicitRange = parseImportTimeRange(text);
+    if (!explicitRange) {
+      const label = cleanImportLabel(text);
+      if (label && parseImportTimeValue(label) == null) {
+        if (isImportMetadataOnlyLabel(label) || r - lastRangeRow <= 16) ignoredMetadataRows += 1;
+        else ignoredTextRows += 1;
+      }
+      continue;
+    }
+
+    lastRangeRow = r;
+    if (explicitRange.end - explicitRange.start < 10) {
+      warnings.push(`${day.label}: hoppade över ${minToTime(explicitRange.start)}–${minToTime(explicitRange.end)} eftersom blocket var kortare än 10 minuter.`);
+      continue;
+    }
+
+    const labelEndRow = (() => {
+      let endRow = r;
+      for (let scan = r + 1; scan <= stopRow; scan += 1) {
+        const scanMinute = rowToMinute(scan);
+        const scanText = getImportCellText(ws, scan, col);
+        if (scanText && parseImportTimeRange(scanText)) break;
+        if (scanMinute != null && scanMinute >= explicitRange.end) break;
+        endRow = scan;
+      }
+      return endRow;
+    })();
+    const inlineLabel = cleanImportLabel(text);
+    const parts = getImportLabelParts(ws, r + 1, labelEndRow, col);
+    const allLabels = [
+      ...(inlineLabel && parseImportTimeValue(inlineLabel) == null ? [{ row: r, label: inlineLabel, metadataOnly: isImportMetadataOnlyLabel(inlineLabel) }] : []),
+      ...parts,
+    ];
+    const primary = allLabels.find(part => !part.metadataOnly) || allLabels[0];
+    if (!primary || isImportMetadataOnlyLabel(primary.label)) {
+      ignoredMetadataRows += Math.max(1, allLabels.length);
+      continue;
+    }
+
+    const detailLabels = allLabels
+      .filter(part => part !== primary)
+      .map(part => part.label)
+      .filter(Boolean);
+    const typeSource = [primary.label, ...detailLabels].join(' ');
+    const type = inferImportedAssignmentType(typeSource, getImportCellFillHex(ws, r, col));
+    entries.push({
+      id: createAssignmentId(),
+      type,
+      label: primary.label,
+      start: explicitRange.start,
+      end: explicitRange.end,
+      durationMinutes: explicitRange.end - explicitRange.start,
+      target: detailLabels.join(' · '),
+      notes: file?.name ? `Importerad från ${file.name}` : 'Importerad från Excel',
+      mustCover: assignmentRequiresCoverByDefault(type),
+      releaseForCover: assignmentReleaseDefault(type),
+      breakFlexibility: defaultBreakFlexibility(type),
+      schoolRole: 'owner',
+    });
+  }
+
+  dayResult.tasks = sortAssignments(entries.map(task => normalizeAssignment(task)).filter(Boolean));
+  if (dayResult.tasks.length > 0) {
+    const minStart = Math.min(...dayResult.tasks.map(task => task.start));
+    const maxEnd = Math.max(...dayResult.tasks.map(task => task.end));
+    dayResult.shift = [minToTime(minStart), minToTime(maxEnd)];
+    warnings.push(`${day.label}: arbetspass föreslogs från första till sista importerade blocket (${dayResult.shift[0]}–${dayResult.shift[1]}).`);
+  }
+  if (ignoredMetadataRows > 0) warnings.push(`${day.label}: ${ignoredMetadataRows} fortsättnings-/metadatarader ignorerades, t.ex. rum, grupp eller minutnotering.`);
+  if (ignoredTextRows > 0) warnings.push(`${day.label}: ${ignoredTextRows} textrader utan tydligt tidsintervall hoppades över.`);
+  return {
+    ...dayResult,
+    sourceLabel: variant.label || day.label,
+    sourceColumn: col,
+    warnings,
+  };
+}
+
 function readPersonalScheduleExcelFile(file) {
   return new Promise((resolve, reject) => {
     const XLSX = window.XLSX;
@@ -6778,105 +6904,93 @@ function readPersonalScheduleExcelFile(file) {
         const rowToMinute = buildImportRowTimeReader(ws, range, header.timeCol);
         const stopRow = findImportStopRow(ws, range, header.row);
         const days = {};
+        const dayVariants = {};
         const warnings = [];
+        const duplicateDays = [];
 
         for (const day of PS_EXPORT_DAYS) {
-          const col = header.dayCols[day.key];
-          if (col == null) continue;
-          const dayResult = { shift: null, tasks: [] };
-          let shiftRow = null;
-          for (let r = header.row + 1; r <= Math.min(stopRow, header.row + 5); r += 1) {
-            const rangeValue = parseImportTimeRange(getImportCellText(ws, r, col));
-            if (rangeValue) {
-              dayResult.shift = [minToTime(rangeValue.start), minToTime(rangeValue.end)];
-              shiftRow = r;
-              break;
-            }
-          }
-
-          const entries = [];
-          const usedTimeRows = new Set();
-          for (let r = header.row + 1; r <= stopRow; r += 1) {
-            if (r === shiftRow) continue;
-            const raw = getImportCellText(ws, r, col);
-            const text = normalizeExcelText(raw);
-            if (!text) continue;
-            const folded = foldText(text);
-            if (folded.includes('arb.tid') || folded === 'ledig' || folded === 'rullande' || getImportDayKey(text)) continue;
-            const explicitRange = parseImportTimeRange(text);
-            const label = cleanImportLabel(text);
-            if (explicitRange && !label) {
-              const previous = entries[entries.length - 1];
-              if (previous && !previous.explicitEnd && r - previous.sourceRow <= 2) {
-                previous.start = explicitRange.start;
-                previous.end = explicitRange.end;
-                previous.explicitEnd = true;
-                usedTimeRows.add(r);
-              }
-              continue;
-            }
-            if (!label || parseImportTimeValue(label) != null) continue;
-
-            const rangeForTask = findNearbyImportTimeRange(ws, r, col, usedTimeRows);
-            const type = inferImportedAssignmentType(label, getImportCellFillHex(ws, r, col));
-            const inferredStart = rowToMinute(r);
-            const start = rangeForTask ? rangeForTask.start : inferredStart;
-            if (start == null) {
-              warnings.push(`${day.label}: hoppade över "${label}" eftersom tiden inte gick att läsa.`);
-              continue;
-            }
-            const end = rangeForTask
-              ? rangeForTask.end
-              : Math.min(24 * 60, start + defaultImportedDuration(type));
-            entries.push({
-              id: createAssignmentId(),
-              type,
-              label,
-              start,
-              end,
-              durationMinutes: Math.max(SLOT_STEP_MINUTES, end - start),
-              target: '',
-              notes: file?.name ? `Importerad från ${file.name}` : 'Importerad från Excel',
-              mustCover: assignmentRequiresCoverByDefault(type),
-              releaseForCover: assignmentReleaseDefault(type),
-              schoolRole: 'owner',
-              sourceRow: r,
-              explicitEnd: !!rangeForTask,
+          const variants = header.dayVariants?.[day.key] || [];
+          if (variants.length === 0) continue;
+          dayVariants[day.key] = variants.map(variant => {
+            const parsed = parsePersonalScheduleImportDay(ws, range, header, stopRow, day, variant, rowToMinute, file);
+            warnings.push(...parsed.warnings);
+            return parsed;
+          });
+          days[day.key] = dayVariants[day.key][0];
+          if (variants.length > 1) {
+            duplicateDays.push({
+              dayKey: day.key,
+              dayLabel: day.label,
+              options: dayVariants[day.key].map((parsed, idx) => ({
+                index: idx,
+                label: parsed.sourceLabel,
+                shift: parsed.shift,
+                taskCount: parsed.tasks.length,
+              })),
             });
-            if (rangeForTask?.sourceRow != null) usedTimeRows.add(rangeForTask.sourceRow);
           }
-
-          entries.sort((a, b) => a.start - b.start || a.sourceRow - b.sourceRow);
-          for (let i = 0; i < entries.length; i += 1) {
-            const task = entries[i];
-            if (!task.explicitEnd) {
-              const next = entries.slice(i + 1).find(item => item.start > task.start);
-              const shiftEnd = dayResult.shift ? timeToMin(dayResult.shift[1]) : null;
-              const maxEnd = next ? next.start : (shiftEnd || task.end);
-              task.end = Math.max(task.start + SLOT_STEP_MINUTES, Math.min(task.end, maxEnd));
-              task.durationMinutes = task.end - task.start;
-            }
-            delete task.sourceRow;
-            delete task.explicitEnd;
-          }
-          dayResult.tasks = sortAssignments(entries.map(task => normalizeAssignment(task)).filter(Boolean));
-          if (!dayResult.shift && dayResult.tasks.length > 0) {
-            const minStart = Math.min(...dayResult.tasks.map(task => task.start));
-            const maxEnd = Math.max(...dayResult.tasks.map(task => task.end));
-            dayResult.shift = [minToTime(minStart), minToTime(maxEnd)];
-            warnings.push(`${day.label}: arbetspass saknades i Excel, appen anvande forsta till sista blocket.`);
-          }
-          days[day.key] = dayResult;
         }
 
         const possibleName = normalizeExcelText(getImportCellText(ws, header.row - 1, 0) || getImportCellText(ws, header.row - 1, 1));
-        resolve({ fileName: file?.name || '', sheetName, personName: possibleName, days, warnings });
+        resolve({ fileName: file?.name || '', sheetName, personName: possibleName, days, dayVariants, duplicateDays, warnings });
       } catch (err) {
         reject(err);
       }
     };
     reader.readAsArrayBuffer(file);
   });
+}
+
+function formatImportTaskPreview(task) {
+  const detail = task.target ? ` · ${task.target}` : '';
+  return `${minToTime(task.start)}–${minToTime(task.end)} ${task.label || inferAssignmentLabel(task.type)}${detail}`;
+}
+
+function buildImportPreviewLines(importData) {
+  const lines = [];
+  PS_EXPORT_DAYS.forEach(day => {
+    const data = importData.days?.[day.key];
+    if (!data) return;
+    const sourceText = data.sourceLabel && data.sourceLabel !== day.label ? ` (${data.sourceLabel})` : '';
+    const shiftText = data.shift ? `${data.shift[0]}–${data.shift[1]}` : 'inget pass';
+    lines.push(`${day.label}${sourceText}: ${shiftText}, ${data.tasks.length} block`);
+    data.tasks.slice(0, 6).forEach(task => lines.push(`  • ${formatImportTaskPreview(task)}`));
+    if (data.tasks.length > 6) lines.push(`  • ... ${data.tasks.length - 6} till`);
+  });
+  return lines;
+}
+
+function chooseDuplicateImportDays(importData) {
+  const duplicateDays = Array.isArray(importData.duplicateDays) ? importData.duplicateDays : [];
+  if (duplicateDays.length === 0) return true;
+  const nextDays = { ...(importData.days || {}) };
+  for (const duplicate of duplicateDays) {
+    const options = duplicate.options || [];
+    const optionLines = options.map((option, idx) => {
+      const shiftText = option.shift ? `${option.shift[0]}–${option.shift[1]}` : 'inget pass';
+      return `${idx + 1}. ${option.label}: ${shiftText}, ${option.taskCount} block`;
+    });
+    const answer = prompt(
+      `Filen innehåller flera kolumner för ${duplicate.dayLabel.toLowerCase()}.\n\n` +
+      `${optionLines.join('\n')}\n\n` +
+      `Skriv numret på den ${duplicate.dayLabel.toLowerCase()} som ska importeras, eller 0 för att hoppa över dagen.`
+    );
+    if (answer == null) return false;
+    const choice = Number(String(answer).trim());
+    if (choice === 0) {
+      delete nextDays[duplicate.dayKey];
+      continue;
+    }
+    if (!Number.isInteger(choice) || choice < 1 || choice > options.length) {
+      alert('Importen avbröts eftersom valet inte gick att tolka.');
+      return false;
+    }
+    nextDays[duplicate.dayKey] = importData.dayVariants?.[duplicate.dayKey]?.[choice - 1];
+  }
+  importData.days = nextDays;
+  importData.warnings = PS_EXPORT_DAYS
+    .flatMap(day => nextDays[day.key]?.warnings || []);
+  return true;
 }
 
 
@@ -7197,14 +7311,10 @@ function PersonalScheduleView({
     setImportBusy(true);
     try {
       const importData = await readPersonalScheduleExcelFile(file);
-      const dayLines = PS_EXPORT_DAYS.map(day => {
-        const data = importData.days?.[day.key];
-        if (!data) return null;
-        const shiftText = data.shift ? `${data.shift[0]}–${data.shift[1]}` : 'inget pass';
-        return `${day.label}: ${shiftText}, ${data.tasks.length} block`;
-      }).filter(Boolean);
+      if (!chooseDuplicateImportDays(importData)) return;
+      const dayLines = buildImportPreviewLines(importData);
       const warningText = importData.warnings?.length
-        ? `\n\nObs:\n${importData.warnings.slice(0, 5).join('\n')}${importData.warnings.length > 5 ? '\n...' : ''}`
+        ? `\n\nObs:\n${importData.warnings.slice(0, 10).join('\n')}${importData.warnings.length > 10 ? '\n...' : ''}`
         : '';
       const firstName = foldText(person.name).split(' ')[0] || '';
       const nameText = importData.personName && firstName && !foldText(importData.personName).includes(firstName)
@@ -7213,7 +7323,7 @@ function PersonalScheduleView({
       const ok = confirm(
         `Importera personligt schema från "${file.name}" till ${person.name}?\n\n` +
         `${dayLines.join('\n') || 'Inga dagar hittades.'}\n\n` +
-        'De importerade dagarnas uppdragsblock ersätter nuvarande block för samma person.' +
+        'De importerade dagarnas uppdragsblock ersätter nuvarande block för samma person. Kontrollera särskilt föreslagna arbetspass efter import.' +
         nameText +
         warningText
       );
@@ -7223,7 +7333,7 @@ function PersonalScheduleView({
         alert('Importen hittade inget som kunde läggas in.');
         return;
       }
-      alert(`Import klart för ${person.name}.\n\n${dayLines.join('\n')}`);
+      alert(`Import klart för ${person.name}.\n\n${dayLines.filter(line => !line.startsWith('  •')).join('\n')}`);
     } catch (err) {
       console.error('Kunde inte importera personligt schema:', err);
       alert(`Kunde inte importera Excel-filen.\n\n${err?.message || 'Okänt fel'}`);
@@ -13902,6 +14012,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v109',
+      title: 'Smartare Excel-import',
+      body: 'Importen av personliga scheman bygger nu block frÃ¥n tydliga tidsintervall och lÃ¤ser efterfÃ¶ljande rader som detaljer i stÃ¤llet fÃ¶r egna smÃ¥pass. Filer med flera kolumner fÃ¶r samma veckodag, till exempel Torsdag HT och Torsdag VT, ger val innan import.',
+    },
     {
       version: 'v108',
       title: 'Rollback av skoldelsfärg',
