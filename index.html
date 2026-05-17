@@ -685,26 +685,6 @@ function getSchoolTaskVisual(task) {
   };
 }
 
-const BASE_ACTIVITY_VISUALS = Object.freeze({
-  fritids: {
-    label: 'Fritids',
-    color: '#0f766e',
-    backgroundColor: 'rgba(15, 118, 110, 0.16)',
-    border: '1px solid rgba(15, 118, 110, 0.18)',
-    textClass: 'text-teal-800',
-  },
-  school: {
-    label: 'Skoldel',
-    color: '#64748b',
-    backgroundColor: 'rgba(100, 116, 139, 0.10)',
-    border: '1px dashed rgba(100, 116, 139, 0.22)',
-    textClass: 'text-slate-600',
-  },
-});
-function getBaseActivityVisual(kind) {
-  return BASE_ACTIVITY_VISUALS[kind] || BASE_ACTIVITY_VISUALS.school;
-}
-
 function createAssignmentId() {
   return `asg-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
 }
@@ -3632,7 +3612,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 54,
+    version: 53,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4369,7 +4349,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v109</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v108</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -9390,22 +9370,17 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
               : `${visibleRows.length} träffar visas i listan.`}
           </p>
           <div className="flex items-center gap-2 flex-wrap text-[10px] text-stone-500">
-            <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 ring-1 ring-stone-200 text-stone-600">
-              Bakgrund:
+            <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-1 ring-1 ring-teal-200 text-teal-800">
+              <span className="w-1.5 h-1.5 rounded-full bg-teal-700" />
+              Fritids
             </span>
-            <span className="inline-flex items-center gap-1 rounded-full px-2 py-1 ring-1"
-              style={{ backgroundColor: BASE_ACTIVITY_VISUALS.fritids.backgroundColor, borderColor: 'rgba(15, 118, 110, 0.18)', color: '#115e59' }}>
-              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: BASE_ACTIVITY_VISUALS.fritids.color }} />
-              Fritidsfönster
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full px-2 py-1 ring-1"
-              style={{ backgroundColor: BASE_ACTIVITY_VISUALS.school.backgroundColor, borderColor: 'rgba(100, 116, 139, 0.22)', color: '#475569' }}>
-              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: BASE_ACTIVITY_VISUALS.school.color }} />
+            <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2 py-1 ring-1 ring-slate-200 text-slate-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
               Skoldel
             </span>
             <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 ring-1 ring-stone-200 text-stone-700">
-              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getAssignmentTypeMeta('lesson').color }} />
-              Uppdrag använder Schemafärger
+              <span className="w-1.5 h-1.5 rounded-full bg-stone-700" />
+              Uppdrag
             </span>
           </div>
         </div>
@@ -9475,7 +9450,7 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                         {baseSegments.map((segment, idx) => {
                           const left = pctFromMin(segment.start);
                           const width = Math.max(1.5, pctFromMin(segment.end) - pctFromMin(segment.start));
-                          const baseVisual = getBaseActivityVisual(segment.kind);
+                          const isFritids = segment.kind === 'fritids';
                           return (
                             <div
                               key={`${person.id}-${idx}-${segment.kind}-${segment.start}`}
@@ -9483,38 +9458,29 @@ function AssignmentsView({ staff, departments, assignments, assignmentWindows, s
                               style={{
                                 left: `${left}%`,
                                 width: `${width}%`,
-                                backgroundColor: baseVisual.backgroundColor,
-                                border: baseVisual.border,
+                                backgroundColor: isFritids ? 'rgba(15, 118, 110, 0.16)' : 'rgba(71, 85, 105, 0.08)',
+                                border: isFritids ? '1px solid rgba(15, 118, 110, 0.18)' : '1px dashed rgba(71, 85, 105, 0.16)',
                               }}
                               title={`${segment.label} ${minToTime(segment.start)}–${minToTime(segment.end)}`}
                             >
                               {width > 8 && (
-                                <span className={`px-1.5 text-[10px] truncate ${baseVisual.textClass}`}>{segment.label}</span>
+                                <span className={`px-1.5 text-[10px] truncate ${isFritids ? 'text-teal-800' : 'text-slate-600'}`}>{segment.label}</span>
                               )}
                             </div>
                           );
                         })}
                         {tasks.map(task => {
                           const meta = getAssignmentTypeMeta(task.type);
-                          const visual = getSchoolTaskVisual(task);
                           const left = pctFromMin(task.start);
                           const width = Math.max(2.4, pctFromMin(task.end) - pctFromMin(task.start));
                           return (
                             <div
                               key={task.id}
-                              className="absolute top-4 bottom-4 rounded-md px-1.5 flex items-center overflow-hidden ring-1"
-                              style={{
-                                left: `${left}%`,
-                                width: `${width}%`,
-                                backgroundColor: visual.strongBackgroundColor,
-                                borderColor: `${visual.borderColor}80`,
-                                borderStyle: visual.borderStyle,
-                                boxShadow: `inset 3px 0 0 ${visual.borderColor}`,
-                                color: '#1C1917',
-                              }}
+                              className="absolute top-4 bottom-4 rounded-md px-1.5 flex items-center overflow-hidden"
+                              style={{ left: `${left}%`, width: `${width}%`, backgroundColor: meta.color, color: '#fff' }}
                               title={`${task.label} · ${minToTime(task.start)}–${minToTime(task.end)}${task.target ? ` · ${task.target}` : ''}`}
                             >
-                              <span className="text-[10px] truncate whitespace-nowrap" style={{ fontWeight: 650 }}>{task.label || meta.label}</span>
+                              <span className="text-[10px] truncate whitespace-nowrap">{task.label}</span>
                             </div>
                           );
                         })}
@@ -10594,10 +10560,6 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
     () => ASSIGNMENT_TEMPLATES.filter(template => ['lesson', 'collab', 'studySupport', 'yard', 'break', 'pedLunch', 'resource', 'planning', 'meeting'].includes(template.type)),
     []
   );
-  const explicitFritidsMeta = getAssignmentTypeMeta('fritids');
-  const explicitSchoolMeta = getAssignmentTypeMeta('school');
-  const openingMeta = getAssignmentTypeMeta('opening');
-  const closingMeta = getAssignmentTypeMeta('closing');
 
   useEffect(() => {
     draftTasksRef.current = draftTasks;
@@ -10760,26 +10722,22 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
             </button>
             <button type="button" onClick={() => addTask('fritids')}
               disabled={!hasShift}
-              className="px-3 py-2 rounded-lg text-sm ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ backgroundColor: `${explicitFritidsMeta.color}16`, borderColor: `${explicitFritidsMeta.color}40`, color: explicitFritidsMeta.color }}>
+              className="px-3 py-2 rounded-lg text-sm bg-teal-50 text-teal-800 ring-1 ring-teal-200 hover:bg-teal-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-teal-50">
               Lägg Fritids
             </button>
             <button type="button" onClick={() => addTask('school')}
               disabled={!hasShift}
-              className="px-3 py-2 rounded-lg text-sm ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ backgroundColor: `${explicitSchoolMeta.color}16`, borderColor: `${explicitSchoolMeta.color}40`, color: explicitSchoolMeta.color }}>
+              className="px-3 py-2 rounded-lg text-sm bg-slate-100 text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-slate-100">
               Lägg Skoldel
             </button>
             <button type="button" onClick={() => upsertBoundaryTask('opening')}
               disabled={!hasShift}
-              className="px-3 py-2 rounded-lg text-sm ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ backgroundColor: `${openingMeta.color}16`, borderColor: `${openingMeta.color}40`, color: openingMeta.color }}>
+              className="px-3 py-2 rounded-lg text-sm bg-sky-50 text-sky-800 ring-1 ring-sky-200 hover:bg-sky-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-sky-50">
               Markera Öppning
             </button>
             <button type="button" onClick={() => upsertBoundaryTask('closing')}
               disabled={!hasShift}
-              className="px-3 py-2 rounded-lg text-sm ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ backgroundColor: `${closingMeta.color}16`, borderColor: `${closingMeta.color}40`, color: closingMeta.color }}>
+              className="px-3 py-2 rounded-lg text-sm bg-amber-50 text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-amber-50">
               Markera Stängning
             </button>
             {prevDayKey && previousTasks.length > 0 && (
@@ -13944,11 +13902,6 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
-    {
-      version: 'v109',
-      title: 'Konsekventa fÃ¤rger i Uppdrag',
-      body: 'Uppdragsvyn skiljer nu tydligare pÃ¥ neutrala verksamhetsfÃ¶nster och riktiga uppdrag. Fritids- och Skoldel-bakgrunden Ã¤r fortsatt diskret, medan uppdragsblock och snabbknappar fÃ¶ljer SchemafÃ¤rger pÃ¥ samma sÃ¤tt som Personligt schema och Skola.',
-    },
     {
       version: 'v108',
       title: 'Rollback av skoldelsfärg',
