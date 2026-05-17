@@ -3531,7 +3531,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 40,
+    version: 42,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4215,7 +4215,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v95</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v97</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -7058,17 +7058,9 @@ function PersonalScheduleView({
           onClick={() => importInputRef.current?.click()}
           disabled={!person || importBusy}
           className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition ring-1 ${person && !importBusy ? 'bg-white text-stone-700 ring-stone-200 hover:bg-stone-50' : 'bg-stone-100 text-stone-400 ring-stone-200 cursor-not-allowed'}`}
-          title={person ? 'LÃ¤s in arbetspass och block frÃ¥n ett personligt Excel-schema' : 'VÃ¤lj en person fÃ¶rst'}
+          title={person ? 'Importera arbetspass och block från Excel till vald person' : 'Välj en person först'}
         >
-          <Upload size={14} />{importBusy ? 'Importerar...' : 'Importera Excel'}
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowColorWizard(true)}
-          className="text-xs text-stone-600 hover:text-stone-900 underline inline-flex items-center gap-1.5"
-          title="Öppna färgwizarden för att justera paletten"
-        >
-          <Sparkles size={12} />Justera färger
+          <Upload size={14} />{importBusy ? 'Importerar...' : 'Importera schema'}
         </button>
         <button
           type="button"
@@ -7082,6 +7074,14 @@ function PersonalScheduleView({
           title={person ? `Exportera ${person.name}s vecka till Excel` : 'Välj en person först'}
         >
           <FileSpreadsheet size={14} />Exportera till Excel
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowColorWizard(true)}
+          className="px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition ring-1 bg-white text-stone-600 ring-stone-200 hover:bg-stone-50 hover:text-stone-900"
+          title="Justera färgerna som används i Personligt schema och Excel-exporten"
+        >
+          <Sparkles size={14} />Schemafärger
         </button>
       </div>
 
@@ -8719,6 +8719,12 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
               const diff = wm - targetMin;
               const hasGeneratedWeek = hasWeekdaySchedule(s);
               const off = hasGeneratedWeek && Math.abs(diff) > 5;
+              const onTarget = hasGeneratedWeek && diff === 0;
+              const diffLabel = !hasGeneratedWeek
+                ? 'Ej genererat'
+                : diff === 0
+                  ? 'OK'
+                  : `${diff > 0 ? '+' : '-'}${minToHM(Math.abs(diff))}`;
               const dept = getDept(s.deptId, departments);
               const tags = [];
               if (s.fixedTimes) tags.push('Fast tid');
@@ -8761,8 +8767,12 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
                   <td className={`px-4 py-3 text-right tabular-nums ${off ? (diff > 0 ? 'text-orange-600' : 'text-amber-700') : 'text-stone-700'}`}>
                     {hasGeneratedWeek ? minToHM(wm) : '—'}
                   </td>
-                  <td className={`px-4 py-3 text-right tabular-nums text-xs ${off ? (diff > 0 ? 'text-orange-600' : 'text-amber-700') : 'text-stone-400'}`}>
-                    {hasGeneratedWeek ? (off ? `${diff > 0 ? '+' : ''}${minToHM(Math.abs(diff))}` : '?') : 'Ej genererat'}
+                  <td className={`px-4 py-3 text-right tabular-nums text-xs ${off ? (diff > 0 ? 'text-orange-600' : 'text-amber-700') : onTarget ? 'text-emerald-700' : 'text-stone-400'}`}>
+                    {onTarget ? (
+                      <span className="inline-flex items-center justify-end gap-1 font-medium">
+                        <CheckCircle2 size={13} />OK
+                      </span>
+                    ) : diffLabel}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1">
@@ -13595,6 +13605,16 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v97',
+      title: 'Tydligare schemaimport och OK-diff',
+      body: 'Diffkolumnen visar nu en grön OK-markering när veckotiden stämmer. I Personligt schema ligger import och export bredvid varandra, och färgknappen har bytt till tydligare Schemafärger.',
+    },
+    {
+      version: 'v96',
+      title: 'Tydligare timdiff',
+      body: 'När schemalagd arbetstid matchar veckomålet visas nu 0 h 0 min i diffkolumnen i stället för ett frågetecken.',
+    },
     {
       version: 'v95',
       title: 'Excel-import till Personligt schema',
