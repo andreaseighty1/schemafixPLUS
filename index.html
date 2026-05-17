@@ -607,6 +607,8 @@ const ASSIGNMENT_TEMPLATES = [
   { id: 'yard-40', type: 'yard', label: 'Rastvärd 40 min', duration: 40 },
   { id: 'break-30', type: 'break', label: 'Rast 30 min', duration: 30 },
   { id: 'pedlunch-20', type: 'pedLunch', label: 'Pedagogisk lunch 20 min', duration: 20 },
+  { id: 'planning-20', type: 'planning', label: 'Planering 20 min', duration: 20 },
+  { id: 'planning-40', type: 'planning', label: 'Planering 40 min', duration: 40 },
   { id: 'planning-60', type: 'planning', label: 'Planering 60 min', duration: 60 },
   { id: 'meeting-30', type: 'meeting', label: 'Möte 30 min', duration: 30 },
 ];
@@ -3726,7 +3728,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 54,
+    version: 55,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4463,7 +4465,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v112</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v113</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -14505,6 +14507,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v113',
+      title: 'Snabbmallar för planering',
+      body: 'Uppdrag har nu snabbknappar för Planering 20, 40 och 60 minuter, så kortare planeringspass kan läggas in utan manuell tidsjustering.',
+    },
     {
       version: 'v112',
       title: 'Buffert-varning för bemanning',
