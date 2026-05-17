@@ -397,6 +397,97 @@ function isFritidsGeneratorPerson(person) {
   return getStaffRoleCategory(person) !== 'teacher';
 }
 
+// ==================== BEHÖRIGHETER (lärarlegitimation) ====================
+// Modell: en person har en lista `certifications`. Varje rad är en ämnesbehörighet
+// med ett eller flera stadier. `type: 'formal'` = lärarlegitimation från Skolverket,
+// `type: 'extension'` = manuell utökning (rektors beslut, t.ex. behov av att täcka
+// upp utan formell legitimation). Schemabyggaren använder detta för att filtrera
+// vilka lärare som FÅR ta vilka pass — utökningar är giltiga men markeras tydligt
+// så det syns var avstegen ligger.
+const SCHOOL_STAGE_OPTIONS = [
+  { id: 'F-3', label: 'F-3', desc: 'Förskoleklass och lågstadium' },
+  { id: '4-6', label: '4-6', desc: 'Mellanstadium' },
+  { id: '7-9', label: '7-9', desc: 'Högstadium' },
+];
+
+const SCHOOL_SUBJECT_OPTIONS = [
+  { id: 'sv',  label: 'Svenska',                   short: 'Sv',  group: 'språk' },
+  { id: 'sva', label: 'Svenska som andraspråk',    short: 'Sva', group: 'språk' },
+  { id: 'en',  label: 'Engelska',                  short: 'En',  group: 'språk' },
+  { id: 'msp', label: 'Moderna språk',             short: 'Msp', group: 'språk' },
+  { id: 'mod', label: 'Modersmål',                 short: 'Mod', group: 'språk' },
+  { id: 'ma',  label: 'Matematik',                 short: 'Ma',  group: 'matnat' },
+  { id: 'no',  label: 'NO (sammanhållet)',         short: 'NO',  group: 'matnat' },
+  { id: 'bi',  label: 'Biologi',                   short: 'Bi',  group: 'matnat' },
+  { id: 'fy',  label: 'Fysik',                     short: 'Fy',  group: 'matnat' },
+  { id: 'ke',  label: 'Kemi',                      short: 'Ke',  group: 'matnat' },
+  { id: 'tk',  label: 'Teknik',                    short: 'Tk',  group: 'matnat' },
+  { id: 'so',  label: 'SO (sammanhållet)',         short: 'SO',  group: 'so' },
+  { id: 'ge',  label: 'Geografi',                  short: 'Ge',  group: 'so' },
+  { id: 'hi',  label: 'Historia',                  short: 'Hi',  group: 'so' },
+  { id: 're',  label: 'Religionskunskap',          short: 'Re',  group: 'so' },
+  { id: 'sh',  label: 'Samhällskunskap',           short: 'Sh',  group: 'so' },
+  { id: 'idh', label: 'Idrott och hälsa',          short: 'Idh', group: 'praktisk' },
+  { id: 'bd',  label: 'Bild',                      short: 'Bd',  group: 'praktisk' },
+  { id: 'mu',  label: 'Musik',                     short: 'Mu',  group: 'praktisk' },
+  { id: 'sl',  label: 'Slöjd',                     short: 'Sl',  group: 'praktisk' },
+  { id: 'hkk', label: 'Hem- och konsumentkunskap', short: 'Hkk', group: 'praktisk' },
+];
+
+const CERTIFICATION_TYPES = [
+  { id: 'formal', label: 'Legitimation', short: 'Leg.', desc: 'Lärarlegitimation från Skolverket' },
+  { id: 'extension', label: 'Manuell utökning', short: 'Utökning', desc: 'Får undervisa utan formell behörighet — markeras tydligt' },
+];
+
+function getSchoolSubjectMeta(id) {
+  return SCHOOL_SUBJECT_OPTIONS.find(s => s.id === id) || null;
+}
+function getSchoolStageMeta(id) {
+  return SCHOOL_STAGE_OPTIONS.find(s => s.id === id) || null;
+}
+function getCertificationTypeMeta(id) {
+  return CERTIFICATION_TYPES.find(t => t.id === id) || CERTIFICATION_TYPES[0];
+}
+
+function normalizeCertifications(value) {
+  // Tar emot godtyckligt indata och returnerar en städad lista. Tar bort rader
+  // med okänt ämne, rensar ogiltiga stadier, och säkerställer typ + id.
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(raw => {
+      if (!raw || typeof raw !== 'object') return null;
+      const subject = String(raw.subject || '').toLowerCase();
+      if (!getSchoolSubjectMeta(subject)) return null;
+      const stages = Array.isArray(raw.stages)
+        ? raw.stages.filter(s => !!getSchoolStageMeta(s))
+        : [];
+      const type = raw.type === 'extension' ? 'extension' : 'formal';
+      const id = raw.id || `cert-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      return {
+        id,
+        subject,
+        stages,
+        type,
+        note: raw.note ? String(raw.note) : '',
+      };
+    })
+    .filter(Boolean);
+}
+
+function canTeach(person, subjectId, stageId) {
+  // Hjälpare för framtida schemabyggare. Returnerar { type, note } om personen
+  // är behörig för ämne+stadium, annars null. Formell legitimation och manuell
+  // utökning behandlas båda som "behörig" men typen skiljer dem åt så UI:t kan
+  // markera utökningar med en tydlig flagga.
+  const certs = normalizeCertifications(person?.certifications);
+  for (const cert of certs) {
+    if (cert.subject === subjectId && cert.stages.includes(stageId)) {
+      return { type: cert.type, note: cert.note };
+    }
+  }
+  return null;
+}
+
 // Tom start. Exempelscenarier kan laddas in via knapp.
 const initialStaff = [];
 
@@ -1177,6 +1268,11 @@ function normalizeCoverageBlock(block, fallbackDeptId = '') {
     label: typeof block?.label === 'string' ? block.label : 'Nytt block',
     scopeType,
     deptId: scopeType === COVERAGE_DEPARTMENT ? (block?.deptId || fallbackDeptId || '') : null,
+    // Ensam-OK: tystar buffert-varningen för det här blocket. Sätts manuellt på
+    // pass där det är meningen att en person räcker (typiskt öppning/stängning
+    // på fritids). Default false — varningen ska träda fram för alla nya block
+    // tills användaren aktivt markerar undantaget.
+    lonelyOk: !!block?.lonelyOk,
   };
 }
 
@@ -1208,14 +1304,16 @@ function blocksToSlots(blocks, scopeType = COVERAGE_SHARED, deptId = null) {
   for (let m = 330; m < 1080; m += SLOT_STEP_MINUTES) {
     let min = 0;
     let max = 0;
+    let lonelyOk = false;
     for (const b of orderedBlocks) {
       if (m >= getCoverageBlockActiveStart(b) && m < b.end) {
         min = b.min;
         max = b.max ?? b.min;
+        lonelyOk = !!b.lonelyOk;
         break;
       }
     }
-    arr.push({ start: m, min, max });
+    arr.push({ start: m, min, max, lonelyOk });
   }
   return arr;
 }
@@ -1793,6 +1891,10 @@ function findSuggestedAssignmentWindow(tasks, shiftStart, shiftEnd, duration = 3
   return { start: fallbackStart, end: fallbackEnd };
 }
 function buildCoverageIssuesForDay(staff, dayKey, coverageScopes, options = {}) {
+  // includeFragile = false som default så befintliga callers (generator-scoring m.m.)
+  // inte plötsligt får upp en massa "fragile"-issues som hard issues. Drift och
+  // Ramtider opt:ar in när de vill se buffert-varningarna.
+  const { includeFragile = false } = options;
   const issues = [];
   (coverageScopes || []).forEach(scope => {
     const slots = computeSlots(staff, dayKey, scope.slots || [], scope, options);
@@ -1814,6 +1916,17 @@ function buildCoverageIssuesForDay(staff, dayKey, coverageScopes, options = {}) 
         kind = 'over';
         delta = slot.count - slot.max;
         target = slot.max;
+      } else if (
+        includeFragile &&
+        slot.count === slot.min &&
+        slot.min >= 1 &&
+        !slot.lonelyOk
+      ) {
+        // Fragile = ingen buffert. Min är uppfylld men inte mer. Om någon
+        // blir frånvarande faller vi ner under min. Tystas av lonelyOk på blocket.
+        kind = 'fragile';
+        delta = 1;
+        target = slot.min + 1;
       }
       if (!kind) {
         flush();
@@ -2076,6 +2189,7 @@ function normalizePerson(person, cycleWeeks = 8) {
     daysOff: Array.from(new Set((Array.isArray(merged.daysOff) ? merged.daysOff : []).filter(day => ALL_DAY_KEYS.includes(day)))),
     allowedPassTypes: normalizeAllowedPassTypes(merged.allowedPassTypes),
     allowedPassIds: normalizeAllowedPassIds(merged.allowedPassIds),
+    certifications: normalizeCertifications(merged.certifications),
     fridayMode,
     // hasFridayRotation speglar fridayMode för bakåtkompatibilitet i kodvägar
     // som ännu inte uppdaterats. Sant ENDAST när fridayMode === 'rotation'.
@@ -4349,7 +4463,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v109</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v112</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4459,6 +4573,7 @@ function FritidsSchemaApp() {
               fridayCycleWeeks={fridayCycleWeeks}
               fridayTemplateRotation={fridayTemplateRotation}
               currentFridayWeek={currentFridayWeek}
+              coverageScopes={coverageScopes}
               onOpenView={setView}
               onOpenAssignmentEditor={openAssignmentEditor}
               onOpenTasksDay={(dayKey) => { setAssignmentDay(dayKey); setView('tasks'); }}
@@ -5184,7 +5299,116 @@ function QuickLink({ icon: Icon, label, onClick }) {
   );
 }
 
-function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, onOpenView, onOpenAssignmentEditor, onOpenTasksDay, onAddSchoolPosition, onDeleteSchoolPosition, onUpdateSchoolPosition }) {
+// ==================== BUFFERT-ÖVERSIKT (proaktiv) ====================
+// Visar för varje dag och varje täckningsscope vilka tidsfönster som ligger
+// precis på minimumet (fragile = buffer 0) eller redan är understaffade (gap).
+// Tystas av "Ensam OK"-flaggan på det enskilda blocket. Komplementär till den
+// reaktiva varningen i Drift: här ser man riskerna INNAN någon blir sjuk.
+function BufferOverviewCard({ staff, coverageScopes, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek }) {
+  const [activeDay, setActiveDay] = useState('mon');
+  const fridayOptions = useMemo(() => ({
+    fridayWeek: activeDay === 'fri' ? currentFridayWeek : 1,
+    cycleWeeks: fridayCycleWeeks,
+    fridayTemplateRotation,
+    includeFragile: true,
+  }), [activeDay, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]);
+
+  const issues = useMemo(
+    () => buildCoverageIssuesForDay(staff, activeDay, coverageScopes, fridayOptions),
+    [staff, activeDay, coverageScopes, fridayOptions]
+  );
+  const gapIssues = issues.filter(i => i.kind === 'gap');
+  const fragileIssues = issues.filter(i => i.kind === 'fragile');
+  const overIssues = issues.filter(i => i.kind === 'over');
+  const hasCoverage = (coverageScopes || []).some(s => (s.slots || []).some(slot => slot.min > 0));
+
+  return (
+    <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+        <div>
+          <p className="text-xs uppercase tracking-wider text-stone-500 mb-0.5">Buffert-översikt</p>
+          <h3 className="display-font text-xl text-stone-800">Tunna punkter och luckor</h3>
+          <p className="text-xs text-stone-500 mt-0.5">
+            Visar var bemanningen ligger precis på minimum (om någon blir sjuk blir det understaffat) eller redan är under min. Tystas av <em>Ensam OK</em> på blocket.
+          </p>
+        </div>
+        <div className="flex gap-1 p-1 rounded-lg bg-stone-100">
+          {DAY_META.map(day => (
+            <button key={day.key} type="button" onClick={() => setActiveDay(day.key)}
+              className={`px-2.5 py-1 rounded-md text-xs transition ${activeDay === day.key ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-600 hover:text-stone-900'}`}>
+              {day.short}
+            </button>
+          ))}
+        </div>
+      </div>
+      {!hasCoverage ? (
+        <p className="rounded-lg bg-stone-50 ring-1 ring-stone-200 p-3 text-sm text-stone-500 text-center">
+          Inga bemanningsregler är satta än. Lägg upp dem i <strong>Bemanning</strong> (under Verktyg) så syns buffert-statusen här.
+        </p>
+      ) : issues.length === 0 ? (
+        <div className="rounded-lg bg-emerald-50 ring-1 ring-emerald-200 p-3 flex items-center gap-2">
+          <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+          <p className="text-sm text-emerald-900">
+            <strong>{getDayMeta(activeDay).label}</strong> — alla bemanningsregler har minst en persons marginal.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {gapIssues.length > 0 && (
+            <div className="rounded-lg bg-rose-50 ring-1 ring-rose-200 p-2.5">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-rose-700 mb-1.5" style={{ fontWeight: 600 }}>
+                <AlertCircle size={11} />Under minimum ({gapIssues.length})
+              </div>
+              <div className="space-y-1">
+                {gapIssues.map(issue => (
+                  <div key={`g-${issue.scopeKey}-${issue.start}`} className="flex items-center gap-2 text-xs">
+                    <span className="text-stone-800" style={{ fontWeight: 500 }}>{issue.scopeLabel}</span>
+                    <span className="tabular-nums text-stone-600">{minToTime(issue.start)}–{minToTime(issue.end)}</span>
+                    <span className="text-rose-700">har {issue.actual}, behöver {issue.target}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {fragileIssues.length > 0 && (
+            <div className="rounded-lg bg-amber-50 ring-1 ring-amber-200 p-2.5">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-800 mb-1.5" style={{ fontWeight: 600 }}>
+                <AlertCircle size={11} />Ingen buffert ({fragileIssues.length})
+              </div>
+              <div className="space-y-1">
+                {fragileIssues.map(issue => (
+                  <div key={`f-${issue.scopeKey}-${issue.start}`} className="flex items-center gap-2 text-xs">
+                    <span className="text-stone-800" style={{ fontWeight: 500 }}>{issue.scopeLabel}</span>
+                    <span className="tabular-nums text-stone-600">{minToTime(issue.start)}–{minToTime(issue.end)}</span>
+                    <span className="text-amber-800">precis {issue.actual} — 1 frånvarande blir kritiskt</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {overIssues.length > 0 && (
+            <div className="rounded-lg bg-stone-50 ring-1 ring-stone-200 p-2.5">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-stone-600 mb-1.5" style={{ fontWeight: 600 }}>
+                Över maximum ({overIssues.length})
+              </div>
+              <div className="space-y-1">
+                {overIssues.map(issue => (
+                  <div key={`o-${issue.scopeKey}-${issue.start}`} className="flex items-center gap-2 text-xs">
+                    <span className="text-stone-800" style={{ fontWeight: 500 }}>{issue.scopeLabel}</span>
+                    <span className="tabular-nums text-stone-600">{minToTime(issue.start)}–{minToTime(issue.end)}</span>
+                    <span className="text-stone-600">har {issue.actual}, max {issue.target}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks, fridayTemplateRotation, currentFridayWeek, coverageScopes = [], onOpenView, onOpenAssignmentEditor, onOpenTasksDay, onAddSchoolPosition, onDeleteSchoolPosition, onUpdateSchoolPosition }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [activeDay, setActiveDay] = useState('mon');
   const [personFilter, setPersonFilter] = useState('all');
@@ -5561,14 +5785,14 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
   };
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+    <div className="space-y-4">
+      <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-4">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="max-w-3xl">
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Gemensam bemanning</p>
-            <h2 className="display-font text-3xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>Skola</h2>
-            <p className="text-sm text-stone-600 mt-2">
-              Skola använder samma personal, samma uppdrag och samma Drift. Lärare läggs i Personal, medan lektioner, studiestöd, rastvärd och möten läggs som uppdrag som Drift kan läsa vid frånvaro.
+            <h2 className="display-font text-2xl text-stone-800" style={{ letterSpacing: '-0.01em' }}>Skola</h2>
+            <p className="text-sm text-stone-600 mt-1">
+              Skola använder samma personal, samma uppdrag och samma Drift. Lärare läggs i Personal; lektioner, studiestöd, rastvärd och möten läggs som uppdrag och fångas av Drift vid frånvaro.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-2 min-w-[260px]">
@@ -5576,7 +5800,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
             <StatCard label="Lektioner & uppdrag" value={schoolPositionCount} sub="från Uppdrag" />
           </div>
         </div>
-        <div className="mt-4 flex flex-wrap gap-1 p-1 rounded-xl bg-stone-100">
+        <div className="mt-3 flex flex-wrap gap-1 p-1 rounded-xl bg-stone-100">
           {[
             { id: 'overview', label: 'Översikt', icon: School },
             { id: 'time', label: 'Ramtider', icon: Clock },
@@ -5596,15 +5820,15 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
       </div>
 
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-[1.15fr,0.85fr] gap-4">
-          <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+        <div className="grid grid-cols-1 lg:grid-cols-[1.15fr,0.85fr] gap-3">
+          <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-4">
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Så håller vi ihop skola och fritids</p>
-            <div className="space-y-3 text-sm text-stone-700 leading-relaxed">
+            <div className="space-y-2 text-sm text-stone-700 leading-relaxed">
               <p><strong>Personal:</strong> alla vuxna bor på samma ställe. Sätt gärna roll som lärare, samverkare, resurs eller fritids.</p>
               <p><strong>Uppdrag:</strong> lektioner, studiestöd, pedagogisk lunch, rastvärd och möten är samma uppdrag som i Uppdrag-delen, men visas här med skolglasögon.</p>
               <p><strong>Drift:</strong> en gemensam frånvarovy visar både skola och fritids när någon är borta.</p>
             </div>
-            <div className="flex flex-wrap gap-2 mt-4">
+            <div className="flex flex-wrap gap-2 mt-3">
               <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
                 <Users size={14} />Öppna Personal
               </button>
@@ -5616,7 +5840,7 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
               </button>
             </div>
           </div>
-          <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
+          <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-4">
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-2">Nästa praktiska steg</p>
             <div className="space-y-2">
               <SchoolStep icon={Users} title="1. Märk upp lärare" text="Använd rollfältet i Personal så Skola-vyn hittar rätt personer." />
@@ -5628,15 +5852,16 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
       )}
 
       {activeTab === 'time' && (
-        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
-          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+        <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
             <div>
-              <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Ramtider från Personal</p>
-              <h3 className="display-font text-2xl text-stone-800">Lärare och samverkare</h3>
+              <p className="text-xs uppercase tracking-wider text-stone-500 mb-0.5">Ramtider från Personal</p>
+              <h3 className="display-font text-xl text-stone-800">Lärare och samverkare</h3>
+              <p className="text-xs text-stone-500 mt-0.5">Personalens arbetstider per dag. Klicka <em>Redigera i Personal</em> för att ändra.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <select value={roleFilter} onChange={e => { setRoleFilter(e.target.value); setPersonFilter('all'); }}
-                className="px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700"
+                className="px-3 py-1.5 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700"
                 title="Filtrera på roll eller befattning">
                 <option value="school">Skola: lärare/samverkare/resurs</option>
                 <option value="teacher">Lärare</option>
@@ -5645,46 +5870,56 @@ function SchoolWorkspaceView({ staff, assignments, departments, fridayCycleWeeks
                 <option value="other">Övriga/utan roll</option>
                 <option value="all">Alla roller</option>
               </select>
-              <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
+              <button type="button" onClick={() => onOpenView('staff')} className="px-3 py-1.5 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center gap-2">
                 <Edit3 size={14} />Redigera i Personal
               </button>
             </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-xs uppercase tracking-wider text-stone-500 bg-stone-50">
+              <thead className="text-[10px] uppercase tracking-wider text-stone-500 bg-stone-50">
                 <tr>
-                  <th className="px-3 py-2 text-left rounded-l-lg">Person</th>
-                  {schoolDays.map(day => <th key={day.key} className="px-3 py-2 text-left">{day.short}</th>)}
-                  <th className="px-3 py-2 text-right rounded-r-lg">Vecka</th>
+                  <th className="px-3 py-1.5 text-left rounded-l-lg">Person</th>
+                  {schoolDays.map(day => <th key={day.key} className="px-3 py-1.5 text-left">{day.short}</th>)}
+                  <th className="px-3 py-1.5 text-right rounded-r-lg">Vecka</th>
                 </tr>
               </thead>
               <tbody>
                 {peopleToShow.map(person => {
                   const weekly = weeklyMinutes(person, fridayCycleWeeks, fridayTemplateRotation);
                   return (
-                    <tr key={person.id} className="border-b border-stone-100 last:border-0">
-                      <td className="px-3 py-3">
-                        <p className="font-medium text-stone-800">{person.name}</p>
-                        <p className="text-xs text-stone-500">{getStaffRoleLabel(person.employmentRole)}{person.role ? ` · ${person.role}` : ''}</p>
+                    <tr key={person.id} className="border-b border-stone-100 last:border-0 hover:bg-stone-50/60 transition">
+                      <td className="px-3 py-1.5">
+                        <p className="text-stone-800 leading-tight" style={{ fontWeight: 500 }}>{person.name}</p>
+                        <p className="text-[11px] text-stone-500 leading-tight">{getStaffRoleLabel(person.employmentRole)}{person.role ? ` · ${person.role}` : ''}</p>
                       </td>
                       {schoolDays.map(day => {
                         const shift = getShiftForDay(person, day.key, { fridayWeek: currentFridayWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation });
                         return (
-                          <td key={day.key} className="px-3 py-3 tabular-nums text-stone-700">
-                            {shift ? `${shift[0]}-${shift[1]}` : <span className="text-stone-400 italic">ledig</span>}
+                          <td key={day.key} className="px-3 py-1.5 tabular-nums text-stone-700 whitespace-nowrap">
+                            {shift ? `${shift[0]}-${shift[1]}` : <span className="text-stone-300">–</span>}
                           </td>
                         );
                       })}
-                      <td className="px-3 py-3 text-right tabular-nums text-stone-700">{minToHM(weekly)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-stone-700">{minToHM(weekly)}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-          {peopleToShow.length === 0 && <p className="text-sm text-stone-500 py-6">Lägg personal först, så visas ramtiderna här.</p>}
+          {peopleToShow.length === 0 && <p className="text-sm text-stone-500 py-4 text-center">Lägg personal först, så visas ramtiderna här.</p>}
         </div>
+      )}
+
+      {activeTab === 'time' && (
+        <BufferOverviewCard
+          staff={staff}
+          coverageScopes={coverageScopes}
+          fridayCycleWeeks={fridayCycleWeeks}
+          fridayTemplateRotation={fridayTemplateRotation}
+          currentFridayWeek={currentFridayWeek}
+        />
       )}
 
       {activeTab === 'builder' && (
@@ -9759,11 +9994,12 @@ function DriftView({
   const staleAbsentRows = rows.filter(row => row.isAbsent && !row.shift);
   const availableStaff = staff.filter(person => !absentSet.has(String(person.id)));
   const coverageIssues = useMemo(
-    () => buildCoverageIssuesForDay(availableStaff, dayKey, coverageScopes, fridayOptions),
+    () => buildCoverageIssuesForDay(availableStaff, dayKey, coverageScopes, { ...fridayOptions, includeFragile: true }),
     [availableStaff, dayKey, coverageScopes, fridayOptions]
   );
   const gapIssues = coverageIssues.filter(issue => issue.kind === 'gap');
   const overIssues = coverageIssues.filter(issue => issue.kind === 'over');
+  const fragileIssues = coverageIssues.filter(issue => issue.kind === 'fragile');
   const lostCoverTasks = useMemo(
     () => absentRows.flatMap(row => row.tasks
       .filter(task => task.mustCover)
@@ -10503,6 +10739,21 @@ function DriftView({
                 <div className="text-[11px] text-stone-500 mt-0.5">Har {issue.actual}, behöver minst {issue.target}.</div>
               </div>
             ))}
+            {fragileIssues.length > 0 && (
+              <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider font-semibold text-stone-400">Tight bemanning — ingen buffert</div>
+            )}
+            {fragileIssues.map(issue => (
+              <div key={`fragile-${issue.scopeKey}-${issue.start}`} className="p-3 m-1 rounded-xl" style={{ background: '#FFFBEB', boxShadow: 'inset 0 0 0 1px #FDE68A' }}>
+                <div className="flex items-center gap-2 text-sm">
+                  <AlertCircle size={14} style={{ color: '#B45309' }} />
+                  <span style={{ fontWeight: 500, color: '#1C1917' }}>{issue.scopeLabel || 'Bemanning'}</span>
+                  <span className="text-xs text-stone-500 tabular-nums">{minToTime(issue.start)}–{minToTime(issue.end)}</span>
+                </div>
+                <div className="text-[11px] text-stone-600 mt-0.5">
+                  Har precis {issue.actual} (min {issue.actual}). Om någon till blir frånvarande blir det understaffat.
+                </div>
+              </div>
+            ))}
             {(absentRows.flatMap(row => row.tasks.filter(t => !t.mustCover))).length > 0 && (
               <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider font-semibold text-stone-400">Faller bort, behöver inte täckas</div>
             )}
@@ -11239,14 +11490,15 @@ function RulesView({ blocks, setBlocks, departments, staff, passBank, fridayCycl
       label: preset.label || 'Nytt block',
       scopeType,
       deptId: scopeType === COVERAGE_DEPARTMENT ? (preset.deptId || departments[0]?.id || '') : null,
+      lonelyOk: !!preset.lonelyOk,
     }]);
   };
   const quickPresets = [
-    { id: 'open', label: 'Öppning 05:50–06:30', scopeType: COVERAGE_SHARED, start: 350, end: 390, min: 1, max: 1 },
+    { id: 'open', label: 'Öppning 05:50–06:30', scopeType: COVERAGE_SHARED, start: 350, end: 390, min: 1, max: 1, lonelyOk: true },
     { id: 'morning', label: 'Morgon 06:30–08:00', scopeType: COVERAGE_SHARED, start: 390, end: 480, min: 2, max: 2 },
     { id: 'f23', label: 'F-2 från 13:15', scopeType: COVERAGE_DEPARTMENT, start: 795, end: 990, min: 2, max: 2 },
     { id: '345', label: 'Åk 3-5 från 14:15', scopeType: COVERAGE_DEPARTMENT, start: 855, end: 990, min: 2, max: 2 },
-    { id: 'close', label: 'Stängning 16:30–17:45', scopeType: COVERAGE_SHARED, start: 990, end: 1065, min: 1, max: 1 },
+    { id: 'close', label: 'Stängning 16:30–17:45', scopeType: COVERAGE_SHARED, start: 990, end: 1065, min: 1, max: 1, lonelyOk: true },
   ];
 
   const sorted = [...blocks].sort((a, b) => a.start - b.start);
@@ -11426,8 +11678,17 @@ function RulesView({ blocks, setBlocks, departments, staff, passBank, fridayCycl
                   : 'bg-emerald-100 text-emerald-700';
             return (
             <div key={b.id} className="grid grid-cols-12 gap-2 items-center py-2 px-2 rounded-lg hover:bg-stone-50">
-              <input className="rules-input col-span-3" value={b.label}
-                onChange={e => updateBlock(b.id, { label: e.target.value })} placeholder="ex. Morgonfritids" />
+              <div className="col-span-3 space-y-1">
+                <input className="rules-input w-full" value={b.label}
+                  onChange={e => updateBlock(b.id, { label: e.target.value })} placeholder="ex. Morgonfritids" />
+                <label className="flex items-center gap-1.5 text-[11px] text-stone-600 cursor-pointer select-none"
+                  title="Markera om en person räcker här (t.ex. öppning/stängning). Då utlöser blocket ingen buffert-varning vid frånvaro.">
+                  <input type="checkbox" checked={!!b.lonelyOk}
+                    onChange={e => updateBlock(b.id, { lonelyOk: e.target.checked })}
+                    className="rounded border-stone-300 cursor-pointer" />
+                  <span>Ensam OK <span className="text-stone-400">— ingen buffert-varning</span></span>
+                </label>
+              </div>
               <select className="rules-input col-span-3"
                 value={b.scopeType === COVERAGE_DEPARTMENT ? `dept:${b.deptId}` : COVERAGE_SHARED}
                 onChange={e => {
@@ -12788,6 +13049,229 @@ function SettingsView({ departments, setDepartments, staff, setStaff, coverageBl
   );
 }
 
+// -------- Behörighets-tab i personredigeringen --------
+// Lärarlegitimation + manuella utökningar per ämne och stadium. Två listor:
+// "Lägg till"-formulär överst, befintliga behörigheter som rader nedanför.
+// Stage-väljaren är multi-select (chips) eftersom en lärare ofta är behörig
+// för flera stadier i samma ämne. Utökningar visas med en tydlig markering
+// så det syns var avstegen från formell legitimation ligger.
+function CertificationsTab({ certifications = [], onChange, isTeacherRole }) {
+  const [draftSubject, setDraftSubject] = useState('');
+  const [draftStages, setDraftStages] = useState([]);
+  const [draftType, setDraftType] = useState('formal');
+  const [draftNote, setDraftNote] = useState('');
+
+  const sortedCerts = useMemo(() => {
+    // Visa legitimationer först, sedan utökningar — så formella behörigheter
+    // hamnar överst och avvikelser nederst där de är lätta att granska.
+    return [...certifications].sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'formal' ? -1 : 1;
+      const aMeta = getSchoolSubjectMeta(a.subject);
+      const bMeta = getSchoolSubjectMeta(b.subject);
+      return (aMeta?.label || '').localeCompare(bMeta?.label || '', 'sv');
+    });
+  }, [certifications]);
+
+  const canAdd = draftSubject && draftStages.length > 0;
+
+  const handleAdd = () => {
+    if (!canAdd) return;
+    const newCert = {
+      id: `cert-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      subject: draftSubject,
+      stages: [...draftStages],
+      type: draftType,
+      note: draftType === 'extension' ? draftNote.trim() : '',
+    };
+    onChange([...(certifications || []), newCert]);
+    setDraftSubject('');
+    setDraftStages([]);
+    setDraftType('formal');
+    setDraftNote('');
+  };
+
+  const handleRemove = (id) => {
+    onChange((certifications || []).filter(c => c.id !== id));
+  };
+
+  const handleToggleStage = (certId, stage) => {
+    onChange((certifications || []).map(c => {
+      if (c.id !== certId) return c;
+      const has = c.stages.includes(stage);
+      return { ...c, stages: has ? c.stages.filter(s => s !== stage) : [...c.stages, stage] };
+    }));
+  };
+
+  const handleChangeType = (certId, type) => {
+    onChange((certifications || []).map(c => c.id === certId ? { ...c, type } : c));
+  };
+
+  const handleChangeNote = (certId, note) => {
+    onChange((certifications || []).map(c => c.id === certId ? { ...c, note } : c));
+  };
+
+  const toggleDraftStage = (stage) => {
+    setDraftStages(prev => prev.includes(stage) ? prev.filter(s => s !== stage) : [...prev, stage]);
+  };
+
+  // Grupper för dropdown — språk, ma/nat, so, praktisk.
+  const subjectGroups = useMemo(() => {
+    const groups = {};
+    for (const s of SCHOOL_SUBJECT_OPTIONS) {
+      groups[s.group] = groups[s.group] || { id: s.group, items: [] };
+      groups[s.group].items.push(s);
+    }
+    const groupLabels = { språk: 'Språk', matnat: 'Matematik och naturvetenskap', so: 'SO-ämnen', praktisk: 'Praktisk-estetiska' };
+    return Object.values(groups).map(g => ({ ...g, label: groupLabels[g.id] || g.id }));
+  }, []);
+
+  return (
+    <div className="space-y-6">
+      <Section title="Behörigheter">
+        <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4 space-y-3">
+          <p className="text-sm text-stone-700">
+            Vilka ämnen och stadier får personen undervisa i? Schemabyggaren använder det här för att föreslå rätt lärare till rätt lektion.
+          </p>
+          <p className="text-xs text-stone-600 leading-relaxed">
+            <strong>Legitimation</strong> = formell lärarlegitimation från Skolverket. <strong>Manuell utökning</strong> = rektors beslut att personen får undervisa något hen saknar formell behörighet i. Utökningar är giltiga men markeras tydligt så det syns var avstegen ligger.
+          </p>
+          {!isTeacherRole && (
+            <p className="text-xs text-amber-800 rounded bg-amber-50 ring-1 ring-amber-200 px-2 py-1.5 inline-block">
+              Den här personen har inte befattningen <em>Lärare</em>. Behörigheter går att lägga in ändå (t.ex. för fritidspedagoger som tar lektioner).
+            </p>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Lägg till behörighet">
+        <div className="rounded-xl bg-white ring-1 ring-stone-200 p-4 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Ämne">
+              <select className="input w-full" value={draftSubject} onChange={e => setDraftSubject(e.target.value)}>
+                <option value="">Välj ämne...</option>
+                {subjectGroups.map(group => (
+                  <optgroup key={group.id} label={group.label}>
+                    {group.items.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </Field>
+            <Field label="Typ">
+              <div className="flex gap-2 flex-wrap">
+                {CERTIFICATION_TYPES.map(t => (
+                  <button key={t.id} type="button" onClick={() => setDraftType(t.id)}
+                    className={`px-3 py-2 rounded-lg text-sm transition ring-1 ${draftType === t.id
+                      ? (t.id === 'extension' ? 'bg-amber-100 ring-amber-300 text-amber-900' : 'bg-emerald-100 ring-emerald-300 text-emerald-900')
+                      : 'bg-white ring-stone-200 text-stone-600 hover:bg-stone-50'}`}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          </div>
+          <Field label="Stadier (välj ett eller flera)">
+            <div className="flex gap-2 flex-wrap">
+              {SCHOOL_STAGE_OPTIONS.map(stage => {
+                const active = draftStages.includes(stage.id);
+                return (
+                  <button key={stage.id} type="button" onClick={() => toggleDraftStage(stage.id)}
+                    title={stage.desc}
+                    className={`px-3 py-1.5 rounded-lg text-sm transition ring-1 ${active ? 'bg-stone-800 text-white ring-stone-800' : 'bg-white text-stone-700 ring-stone-200 hover:bg-stone-50'}`}>
+                    {stage.label}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+          {draftType === 'extension' && (
+            <Field label="Anteckning (visas i utökningslistan)">
+              <input className="input w-full" type="text" value={draftNote} onChange={e => setDraftNote(e.target.value)}
+                placeholder="T.ex. 'Behov ht 2025' eller 'Erfaren — godkänd av rektor'" />
+            </Field>
+          )}
+          <div className="flex justify-end">
+            <button type="button" onClick={handleAdd} disabled={!canAdd}
+              className={`px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition ${canAdd ? 'bg-stone-800 text-white hover:bg-stone-900' : 'bg-stone-200 text-stone-500 cursor-not-allowed'}`}>
+              <Plus size={14} />Lägg till behörighet
+            </button>
+          </div>
+        </div>
+      </Section>
+
+      <Section title={`Befintliga behörigheter (${certifications.length})`}>
+        {certifications.length === 0 ? (
+          <p className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-6 text-sm text-stone-500 text-center">
+            Inga behörigheter inlagda än. Använd formuläret ovan för att lägga till första.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {sortedCerts.map(cert => {
+              const subjectMeta = getSchoolSubjectMeta(cert.subject);
+              const typeMeta = getCertificationTypeMeta(cert.type);
+              const isExtension = cert.type === 'extension';
+              return (
+                <div key={cert.id}
+                  className={`rounded-xl ring-1 p-3 ${isExtension ? 'bg-amber-50/50 ring-amber-200' : 'bg-white ring-stone-200'}`}>
+                  <div className="flex items-start gap-3 flex-wrap">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm text-stone-800" style={{ fontWeight: 600 }}>{subjectMeta?.label || cert.subject}</span>
+                        <span className={`text-[10px] rounded-full px-2 py-0.5 ring-1 ${isExtension
+                          ? 'bg-amber-100 ring-amber-300 text-amber-900'
+                          : 'bg-emerald-100 ring-emerald-300 text-emerald-900'}`}>
+                          {isExtension && <AlertCircle size={10} className="inline mr-0.5 -mt-0.5" />}
+                          {typeMeta.label}
+                        </span>
+                      </div>
+                      {/* Stage-chips per rad — togglas direkt utan att gå via en modal */}
+                      <div className="flex gap-1.5 flex-wrap mt-2">
+                        {SCHOOL_STAGE_OPTIONS.map(stage => {
+                          const active = cert.stages.includes(stage.id);
+                          return (
+                            <button key={stage.id} type="button" onClick={() => handleToggleStage(cert.id, stage.id)}
+                              title={stage.desc}
+                              className={`px-2 py-0.5 rounded-md text-[11px] transition ring-1 ${active ? 'bg-stone-700 text-white ring-stone-700' : 'bg-white text-stone-500 ring-stone-200 hover:bg-stone-50'}`}>
+                              {stage.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {isExtension && (
+                        <input className="input w-full mt-2 text-xs" type="text"
+                          placeholder="Anteckning (frivillig)"
+                          value={cert.note || ''}
+                          onChange={e => handleChangeNote(cert.id, e.target.value)} />
+                      )}
+                      <div className="flex gap-1 mt-2">
+                        {CERTIFICATION_TYPES.map(t => (
+                          <button key={t.id} type="button" onClick={() => handleChangeType(cert.id, t.id)}
+                            className={`text-[10px] px-2 py-0.5 rounded transition ${cert.type === t.id ? 'bg-stone-200 text-stone-800' : 'text-stone-500 hover:bg-stone-100'}`}>
+                            {t.short}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => handleRemove(cert.id)}
+                      className="text-stone-400 hover:text-rose-600 transition p-1 -m-1"
+                      title="Ta bort behörigheten" aria-label="Ta bort">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                  {cert.stages.length === 0 && (
+                    <p className="text-[10px] text-amber-700 mt-2">
+                      Inga stadier valda — behörigheten är inte aktiv förrän minst ett stadium är markerat.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
 // -------- Edit Modal --------
 
 function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, fridayTemplateRotation, onSave, onClose, onRemove }) {
@@ -13042,6 +13526,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
                 { key: 'basic', label: 'Grund', hint: 'Namn, befattning och generator' },
                 { key: 'schedule', label: 'Befintligt schema', hint: 'Skriv in tider direkt' },
                 { key: 'rules', label: 'Pusselregler', hint: 'Generator och fredagar' },
+                { key: 'certs', label: 'Behörigheter', hint: 'Ämnen och stadier' },
               ].map(tab => (
                 <button key={tab.key} type="button" onClick={() => setStaffEditTab(tab.key)}
                   className={`flex-1 px-3 py-2 rounded-lg text-left transition ${staffEditTab === tab.key ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-200' : 'text-stone-600 hover:bg-stone-50'}`}>
@@ -13574,6 +14059,14 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
           </Section>
           </div>
 
+          <div className={staffEditTab === 'certs' ? 'space-y-6' : 'hidden'}>
+            <CertificationsTab
+              certifications={form.certifications || []}
+              onChange={(next) => setForm({ ...form, certifications: next })}
+              isTeacherRole={getStaffRoleCategory(form) === 'teacher'}
+            />
+          </div>
+
           {/* Veckosumma */}
           <div className={`rounded-lg p-4 flex items-center justify-between ${off ? 'bg-orange-50 ring-1 ring-orange-200' : 'bg-emerald-50 ring-1 ring-emerald-200'}`}>
             <div className="flex items-center gap-2">
@@ -14012,6 +14505,21 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v112',
+      title: 'Buffert-varning för bemanning',
+      body: 'Bemanning har en ny "Ensam OK"-flagga per block för pass där en person räcker (öppning/stängning). Övriga block utlöser nu en buffert-varning när bemanningen ligger precis på minimum — "ingen buffert, 1 frånvarande blir kritiskt". Skola/Ramtider visar tunna punkter per dag proaktivt, Drift visar dem reaktivt när frånvaro registreras.',
+    },
+    {
+      version: 'v111',
+      title: 'Tätare Skola-vy',
+      body: 'Skola och Ramtider använder nu samma kompakta rytm som Uppdrag — mindre luft mellan rader, mindre rubriker och tätare tabeller. Fler personer ryms på skärmen utan att scrolla.',
+    },
+    {
+      version: 'v110',
+      title: 'Behörigheter på lärare',
+      body: 'Personal har nu en fjärde flik "Behörigheter" där du anger vilka ämnen och stadier (F-3, 4-6, 7-9) personen får undervisa i. Lärarlegitimation från Skolverket markeras som Legitimation, och rektors-beslut om avsteg markeras som Manuell utökning så de syns tydligt. Schemabyggaren kommer använda detta för att föreslå rätt lärare till rätt lektion.',
+    },
     {
       version: 'v109',
       title: 'Smartare Excel-import',
