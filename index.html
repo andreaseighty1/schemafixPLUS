@@ -3531,7 +3531,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 38,
+    version: 39,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4167,7 +4167,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v93</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v94</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -6887,7 +6887,7 @@ function PersonalScheduleView({
                           <div key={task.id}
                             onPointerDown={(event) => startTaskDrag(event, task, d.key, 'move')}
                             title={hasCollision ? `Överlappar ${collisionCount} annat block` : `${task.label || meta.label} · ${minToTime(visualStart)}-${minToTime(visualEnd)}`}
-                            className={`group absolute rounded-md ring-1 hover:shadow-md hover:z-30 transition touch-none cursor-grab active:cursor-grabbing ${preview ? 'z-20 shadow-lg' : 'z-10'} ${preview?.copy ? 'opacity-90' : ''}`}
+                            className={`group absolute rounded-md ring-1 hover:shadow-md hover:z-30 focus-within:z-30 transition touch-none cursor-grab active:cursor-grabbing ${preview ? 'z-20 shadow-lg' : 'z-10'} ${preview?.copy ? 'opacity-90' : ''}`}
                             style={{
                               ...toBlockStyle(visualStart, visualEnd, renderDayIdx),
                               borderColor: hasCollision ? '#F59E0B' : visual.borderColor,
@@ -6908,28 +6908,28 @@ function PersonalScheduleView({
                             {/* Innehåll — wrapper med overflow-hidden så texten inte läcker ut, blocket självt är overflow-visible för popupen. */}
                             <div className="absolute inset-0 overflow-hidden rounded-md pointer-events-none flex flex-col justify-center px-1.5">
                               {isTiny ? (
-                                <span className="text-[9px] tabular-nums leading-tight truncate" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>
+                                <span className="text-[9px] tabular-nums leading-tight truncate" style={{ color: '#1C1917', fontWeight: 700 }}>
                                   {minToTime(visualStart)}–{minToTime(visualEnd)}
                                 </span>
                               ) : isSmall ? (
                                 <>
-                                  <span className="block text-[10px] tabular-nums leading-none truncate" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>
+                                  <span className="block text-[10px] tabular-nums leading-none truncate" style={{ color: '#1C1917', fontWeight: 700 }}>
                                     {minToTime(visualStart)}–{minToTime(visualEnd)}
                                   </span>
-                                  <span className="block text-[10px] leading-tight mt-0.5 truncate" style={{ fontWeight: 600, color: visual.textColor }}>
+                                  <span className="block text-[10px] leading-tight mt-0.5 truncate" style={{ fontWeight: 600, color: '#1C1917' }}>
                                     {task.label || meta.label}
                                   </span>
                                 </>
                               ) : (
                                 <>
-                                  <span className="block text-[10px] tabular-nums leading-none" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>
+                                  <span className="block text-[10px] tabular-nums leading-none" style={{ color: '#1C1917', fontWeight: 700 }}>
                                     {minToTime(visualStart)}–{minToTime(visualEnd)}
                                   </span>
-                                  <span className="block text-[11px] leading-tight mt-0.5 break-words" style={{ fontWeight: 600, color: visual.textColor }}>
+                                  <span className="block text-[11px] leading-tight mt-0.5 break-words" style={{ fontWeight: 600, color: '#1C1917' }}>
                                     {task.label || meta.label}
                                   </span>
                                   {task.target && (
-                                    <span className="block text-[10px] leading-tight text-stone-500 mt-0.5 break-words">
+                                    <span className="block text-[10px] leading-tight text-stone-900 mt-0.5 break-words">
                                       {task.target}
                                     </span>
                                   )}
@@ -6964,21 +6964,21 @@ function PersonalScheduleView({
                                   <div className="flex gap-1 mt-2 pt-2 border-t border-stone-100">
                                     <button type="button"
                                       onPointerDown={event => event.stopPropagation()}
-                                      onClick={event => { event.stopPropagation(); onOpenAssignmentEditor?.(person.id, d.key); }}
+                                      onClick={event => { event.stopPropagation(); event.currentTarget.blur(); onOpenAssignmentEditor?.(person.id, d.key); }}
                                       className="flex-1 rounded bg-white px-2 py-1 text-[10px] text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50"
                                       title="Öppna finredigering">
                                       Ändra
                                     </button>
                                     <button type="button"
                                       onPointerDown={event => event.stopPropagation()}
-                                      onClick={event => { event.stopPropagation(); handleDuplicate(task, d.key); }}
+                                      onClick={event => { event.stopPropagation(); event.currentTarget.blur(); handleDuplicate(task, d.key); }}
                                       className="flex-1 rounded bg-white px-2 py-1 text-[10px] text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50"
                                       title="Skapa en kopia på samma dag">
                                       Duplicera
                                     </button>
                                     <button type="button"
                                       onPointerDown={event => event.stopPropagation()}
-                                      onClick={event => { event.stopPropagation(); handleDelete(task, d.key); }}
+                                      onClick={event => { event.stopPropagation(); event.currentTarget.blur(); handleDelete(task, d.key); }}
                                       className="rounded bg-rose-50 px-2 py-1 text-[10px] text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100 inline-flex items-center justify-center"
                                       title="Ta bort uppdraget"
                                       aria-label="Ta bort uppdraget">
@@ -13174,6 +13174,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v94',
+      title: 'Stabilare hoverpanel i Personligt schema',
+      body: 'Hoverpanelen vid block släpper nu fokus efter Ändra, Duplicera och Ta bort, och blocket ligger kvar överst även vid tangentbordsfokus. Texten i schemablocken är svart så färgerna används som bakgrund och kant, inte på klockslag.',
+    },
     {
       version: 'v93',
       title: 'Smala block fungerar nu — klockslag och knappar i hover-popup',
