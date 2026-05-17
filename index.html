@@ -390,8 +390,9 @@ function getStaffRoleCategory(person) {
 }
 
 function isFritidsGeneratorPerson(person) {
-  // Schemageneratorn pusslar bara fritidsbemanning. Renodlade lärare hör till
-  // Personligt schema/Uppdrag/Skola/Drift och ska inte få nya fritidspass här.
+  // Schemageneratorn pusslar bara personer som uttryckligen hör till
+  // fritidsverkstaden. Äldre data utan flagga migreras från befattningen.
+  if (typeof person?.includeInGenerator === 'boolean') return person.includeInGenerator;
   return getStaffRoleCategory(person) !== 'teacher';
 }
 
@@ -2046,11 +2047,17 @@ function normalizePerson(person, cycleWeeks = 8) {
   // om någon byter läge fram och tillbaka.
   if (!isPassbankFriday) delete sched.fri;
 
+  const employmentRole = normalizeEmploymentRole(merged.employmentRole, merged.role);
+  const includeInGenerator = typeof merged.includeInGenerator === 'boolean'
+    ? merged.includeInGenerator
+    : getStaffRoleCategory({ ...merged, employmentRole }) !== 'teacher';
+
   return {
     ...merged,
     name: merged.name || '',
     role: merged.role || '',
-    employmentRole: normalizeEmploymentRole(merged.employmentRole, merged.role),
+    employmentRole,
+    includeInGenerator,
     deptId: merged.deptId || '',
     fullTimeHours: asNumber(merged.fullTimeHours, DEFAULTS.fullTimeHours),
     percent: asNumber(merged.percent, DEFAULTS.percent),
@@ -3536,7 +3543,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 46,
+    version: 47,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4102,12 +4109,17 @@ function FritidsSchemaApp() {
     updateScheduleShift(personId, dayKey, baselineShift, options);
   };
 
-  // Återställ HELA staff till baselinen. Slänger alla manuella ändringar
-  // som gjorts sedan senaste generering/inläsning.
+  // Återställ generatorpersonernas pass till baselinen. Övriga roller hör till
+  // huvudschemat och ska inte påverkas av generatorns ångra-flöde.
   const resetAllToBaseline = () => {
     if (!baselineStaff) return;
-    if (!confirm('Detta återställer alla manuella ändringar i schemat till den senaste utgångspunkten. Fortsätt?')) return;
-    setStaff(JSON.parse(JSON.stringify(baselineStaff)));
+    if (!confirm('Detta återställer generatorpersonernas arbetspass till den senaste utgångspunkten. Lärare, uppdrag, skoldel och driftdata påverkas inte. Fortsätt?')) return;
+    const baselineById = new Map(baselineStaff.map(person => [String(person.id), person]));
+    setStaff(prev => prev.map(person => {
+      if (!isFritidsGeneratorPerson(person)) return person;
+      const baselinePerson = baselineById.get(String(person.id));
+      return baselinePerson ? normalizePerson(JSON.parse(JSON.stringify(baselinePerson)), fridayCycleWeeks) : person;
+    }));
   };
 
   const applyAlternative = (alt) => {
@@ -4246,7 +4258,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v101</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v102</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4446,7 +4458,7 @@ function FritidsSchemaApp() {
           fridayTemplateRotation={fridayTemplateRotation}
           currentFridayWeek={currentFridayWeek}
         />}
-        {view === 'rules' && <RulesView blocks={normalizedCoverageBlocks} setBlocks={setCoverageBlocks} departments={departments} staff={staff} passBank={passBank} fridayCycleWeeks={fridayCycleWeeks} feasibilityIssues={feasibilityIssues} />}
+        {view === 'rules' && <RulesView blocks={normalizedCoverageBlocks} setBlocks={setCoverageBlocks} departments={departments} staff={generatorStaff} passBank={passBank} fridayCycleWeeks={fridayCycleWeeks} feasibilityIssues={feasibilityIssues} />}
         {view === 'passbank' && <PassbankView passBank={passBank} setPassBank={setPassBank}
           staff={staff} setStaff={setStaff} departments={departments} />}
         {view === 'friday' && <FridayRollView staff={staff} departments={departments}
@@ -8182,7 +8194,7 @@ function GeneratorPrerequisitesBanner({ staffCount, generatorExcludedCount = 0, 
       </div>
       {generatorExcludedCount > 0 && (
         <p className="mt-3 text-xs text-stone-500">
-          {generatorExcludedCount} {generatorExcludedCount === 1 ? 'person' : 'personer'} med lärarroll är avskild från Schemageneratorn och används i stället i Personligt schema, Uppdrag, Skola och Drift.
+          {generatorExcludedCount} {generatorExcludedCount === 1 ? 'person är avskild' : 'personer är avskilda'} från Schemageneratorn och används i stället i Personligt schema, Uppdrag, Skola och Drift.
         </p>
       )}
     </div>
@@ -8377,7 +8389,7 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
   return (
     <div className="space-y-4">
       <TabIntro>
-        Schemageneratorn är ett verktyg för att bygga personalschema för fritidshemmet. Den använder personal som inte har ren lärarroll, pusslar fram grundschema utifrån passbank och bemanningskrav, och lämnar lärares scheman till Personligt schema, Uppdrag, Skola och Drift.
+        Schemageneratorn är ett verktyg för att bygga personalschema för fritidshemmet. Den använder bara personer som är markerade som ingår i Schemagenerator, pusslar fram grundschema utifrån passbank och bemanningskrav, och lämnar övriga scheman till Personligt schema, Uppdrag, Skola och Drift.
       </TabIntro>
       <GeneratorPrerequisitesBanner
         staffCount={staffCount}
@@ -8722,6 +8734,7 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
   const [staffSearch, setStaffSearch] = useState('');
   const roleFilterOptions = [
     { id: 'all', label: 'Alla', match: () => true },
+    { id: 'generator', label: 'Schemagenerator', match: person => isFritidsGeneratorPerson(person) },
     { id: 'fritids', label: 'Lärare i fritidshem', match: person => getStaffRoleCategory(person) === 'fritids' },
     { id: 'teacher', label: 'Lärare', match: person => getStaffRoleCategory(person) === 'teacher' },
     { id: 'support', label: 'Vikarie/resurs', match: person => getStaffRoleCategory(person) === 'support' },
@@ -8828,6 +8841,7 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
               const dept = getDept(s.deptId, departments);
               const tags = [];
               if (s.fixedTimes) tags.push('Fast tid');
+              tags.push(isFritidsGeneratorPerson(s) ? 'Ingår i generator' : 'Ej generator');
               if (s.onlyAfternoons) tags.push('Endast em.');
               if (s.earliestStart != null) tags.push(`Tidigast ${minToTime(s.earliestStart)}`);
               if (s.latestStart  != null) tags.push(`Senast börja ${minToTime(s.latestStart)}`);
@@ -12518,6 +12532,10 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
   const effectiveAllowedPassIds = getAllowedPassIdsForPerson(form, normalizedPassBank);
   const usingAllPassTypes = (form.allowedPassTypes || []).length === 0;
   const usingAllPasses = (form.allowedPassIds || []).length === 0;
+  const setEmploymentRole = (employmentRole) => {
+    const category = getStaffRoleCategory({ ...form, employmentRole });
+    setForm({ ...form, employmentRole, includeInGenerator: category !== 'teacher' });
+  };
   const passTypeGroups = availablePassTypes.map(type => {
     const passes = normalizedPassBank.filter(pass => pass.passType === type.id);
     return {
@@ -12739,7 +12757,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
           <div className="sticky top-0 z-10 -mx-1 bg-white/95 backdrop-blur border-b border-stone-100 pb-3">
             <div className="flex gap-1 p-1 bg-stone-100 rounded-xl">
               {[
-                { key: 'basic', label: 'Grund', hint: 'Namn, befattning och tjänst' },
+                { key: 'basic', label: 'Grund', hint: 'Namn, befattning och generator' },
                 { key: 'schedule', label: 'Befintligt schema', hint: 'Skriv in tider direkt' },
                 { key: 'rules', label: 'Pusselregler', hint: 'Generator och fredagar' },
               ].map(tab => (
@@ -12758,7 +12776,7 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
             <div className="grid grid-cols-2 gap-4">
               <Field label="Namn"><input className="input" autoComplete="off" spellCheck="false" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field>
               <Field label="Befattning">
-                <select className="input" value={form.employmentRole || ''} onChange={e => setForm({ ...form, employmentRole: e.target.value })}>
+                <select className="input" value={form.employmentRole || ''} onChange={e => setEmploymentRole(e.target.value)}>
                   {STAFF_ROLE_OPTIONS.map(option => <option key={option.id || 'empty'} value={option.id}>{option.label}</option>)}
                 </select>
               </Field>
@@ -12770,6 +12788,12 @@ function StaffEditModal({ staff, departments, passBank, fridayCycleWeeks, friday
               <Field label="Förtydligande/undervisning"><input className="input" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} placeholder="ex. åk 1, musik, samverkan" /></Field>
             </div>
             <p className="text-xs text-stone-500 mt-2">Befattning styr filtren i Skola. Förtydligandet syns i listor och Drift-sökningen, till exempel åk 1, musik eller samverkan.</p>
+            <div className="mt-4 rounded-xl bg-stone-50 ring-1 ring-stone-200 p-3">
+              <Toggle checked={!!form.includeInGenerator} onChange={v => setForm({ ...form, includeInGenerator: v })}
+                label="Ingår i Schemagenerator"
+                hint={form.includeInGenerator ? 'Kan få fritidspass när generatorn pusslar förslag' : 'Finns kvar i huvudappen men lämnas utanför generatorförslag'}
+                tip="Använd detta för fritidshemspersonal som ska kunna pusslas inför nytt läsår. Stäng av för renodlade lärare eller personer som bara ska finnas i Personligt schema, Uppdrag, Skola och Drift." />
+            </div>
             <div className="mt-4">
               <p className="text-xs text-stone-600 mb-2" style={{ fontWeight: 500 }}>Tjänstgöring</p>
               <div className="grid grid-cols-2 gap-4">
@@ -13705,6 +13729,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v102',
+      title: 'Personer väljer generatorn själva',
+      body: 'Personal har nu en tydlig inställning för om personen ingår i Schemageneratorn. Generatorn, bemanningskontrollen och förslagen använder den flaggan i stället för att bara gissa på befattning.',
+    },
     {
       version: 'v101',
       title: 'Säkrare Schemagenerator',
