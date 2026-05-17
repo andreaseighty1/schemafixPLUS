@@ -389,6 +389,12 @@ function getStaffRoleCategory(person) {
   return 'other';
 }
 
+function isFritidsGeneratorPerson(person) {
+  // Schemageneratorn pusslar bara fritidsbemanning. Renodlade lärare hör till
+  // Personligt schema/Uppdrag/Skola/Drift och ska inte få nya fritidspass här.
+  return getStaffRoleCategory(person) !== 'teacher';
+}
+
 // Tom start. Exempelscenarier kan laddas in via knapp.
 const initialStaff = [];
 
@@ -3346,7 +3352,7 @@ function FritidsSchemaApp() {
     [assignmentWindows, departments, normalizedCoverageBlocks]
   );
   const feasibilityIssues = useMemo(
-    () => analyzeCoverageFeasibility(staff, passBank, coverageScopes, fridayCycleWeeks),
+    () => analyzeCoverageFeasibility(staff.filter(isFritidsGeneratorPerson), passBank, coverageScopes, fridayCycleWeeks),
     [staff, passBank, coverageScopes, fridayCycleWeeks]
   );
   const [activeDay, setActiveDay] = useState('mon');
@@ -3371,6 +3377,8 @@ function FritidsSchemaApp() {
   const [showExamplePicker, setShowExamplePicker] = useState(false);
   const [tourStep, setTourStep] = useState(null); // null = ingen tur aktiv, annars 0..5
   const [tourMode, setTourMode] = useState(WORKFLOW_MODE_GENERATE);
+  const generatorStaff = useMemo(() => staff.filter(isFritidsGeneratorPerson), [staff]);
+  const generatorExcludedCount = staff.length - generatorStaff.length;
   const footerHint = useMemo(() => {
     if (view === 'school') return 'Skola använder samma personal, uppdrag och Drift. Bygg lärarschema med block som sedan kan analyseras vid frånvaro.';
     if (view === 'drift') return 'Drift är för dagens och närmaste tidens frånvaro. Den analyserar avvikelser och föreslår lösningar utan att skriva om grundschemat.';
@@ -3528,7 +3536,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 44,
+    version: 46,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3855,9 +3863,10 @@ function FritidsSchemaApp() {
   };
 
   const dayData = useMemo(() => {
+    const sourceStaff = view === 'schedule' ? generatorStaff : staff;
     let present;
     if (activeDay === 'fri') {
-      present = staff
+      present = sourceStaff
         .filter(s => !(s.daysOff || []).includes('fri'))
         .map(s => {
           // Passbank-läge: fredag bor i sched.fri precis som vilken annan dag.
@@ -3872,7 +3881,7 @@ function FritidsSchemaApp() {
         .filter(Boolean)
         .sort((a, b) => a.startMin - b.startMin);
     } else {
-      present = staff.filter(s => s.sched[activeDay] && !(s.daysOff || []).includes(activeDay))
+      present = sourceStaff.filter(s => s.sched[activeDay] && !(s.daysOff || []).includes(activeDay))
         .map(s => ({ ...s, startMin: timeToMin(s.sched[activeDay][0]), endMin: timeToMin(s.sched[activeDay][1]) }))
         .sort((a, b) => a.startMin - b.startMin);
     }
@@ -3909,7 +3918,7 @@ function FritidsSchemaApp() {
       totalOverMinutes: coverageViews.reduce((sum, v) => sum + v.overMinutes, 0),
       primaryCoverageKey: primaryCoverage?.key || COVERAGE_SHARED,
     };
-  }, [staff, activeDay, coverageScopes, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]);
+  }, [staff, generatorStaff, view, activeDay, coverageScopes, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation]);
 
   const violations = useMemo(() => {
     const v = [];
@@ -4053,7 +4062,7 @@ function FritidsSchemaApp() {
   };
 
   const handleGenerate = async () => {
-    const preparedStaff = prepareStaffForUse(staff, fridayCycleWeeks, fridayTemplateRotation, passBank, coverageScopes);
+    const preparedStaff = prepareStaffForUse(generatorStaff, fridayCycleWeeks, fridayTemplateRotation, passBank, coverageScopes);
     setGenerating(true);
     setAlternatives(null);
     setGenerationProgress({ percent: 3, label: 'Förbereder...', detail: 'Samlar regler och bemanningskrav' });
@@ -4102,10 +4111,35 @@ function FritidsSchemaApp() {
   };
 
   const applyAlternative = (alt) => {
-    setStaff(alt.staff);
-    // Snapshot: genererade schemat är nu den nya utgångspunkten. Allt
-    // användaren ändrar manuellt efter detta blir markerat som "ändrad".
-    setBaselineStaff(JSON.parse(JSON.stringify(alt.staff)));
+    const generatedStaff = Array.isArray(alt?.staff) ? alt.staff.map(person => normalizePerson(person, fridayCycleWeeks)) : [];
+    const generatedById = new Map(generatedStaff.map(person => [String(person.id), person]));
+    if (generatedById.size === 0) return;
+    const affectedCount = staff.filter(person => generatedById.has(String(person.id))).length;
+    if (!confirm(`Detta skriver in schemaförslaget för ${affectedCount} ${affectedCount === 1 ? 'fritidsperson' : 'fritidspersoner'}.\n\nLärare, uppdrag, skoldel och driftdata påverkas inte, men arbetspassen för berörd fritidspersonal ersätts av förslaget. Fortsätt?`)) return;
+    const nextStaff = staff.map(person => {
+      const generated = generatedById.get(String(person.id));
+      if (!generated) return person;
+      const nextSched = {};
+      WEEKDAY_KEYS.forEach(dayKey => {
+        if (generated.sched?.[dayKey]) nextSched[dayKey] = generated.sched[dayKey];
+      });
+      if (generated.fridayMode === 'passbank' && generated.sched?.fri) nextSched.fri = generated.sched.fri;
+      return normalizePerson({
+        ...person,
+        sched: nextSched,
+        fridayMode: generated.fridayMode,
+        fridayShift: generated.fridayShift,
+        fridayRotation: generated.fridayRotation,
+        fridayUseTemplate: generated.fridayUseTemplate,
+        fridayTemplateStartWeek: generated.fridayTemplateStartWeek,
+        fridayTemplateOverrides: generated.fridayTemplateOverrides,
+        hasFridayRotation: generated.hasFridayRotation,
+      }, fridayCycleWeeks);
+    });
+    setStaff(nextStaff);
+    // Snapshot: det tillämpade förslaget är nu ny utgångspunkt. Manuell
+    // finjustering efter detta markeras som ändrad i schemavyn.
+    setBaselineStaff(JSON.parse(JSON.stringify(nextStaff)));
     setAlternatives(null);
   };
 
@@ -4212,7 +4246,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v99</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v101</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4290,7 +4324,7 @@ function FritidsSchemaApp() {
                   Spara som...
                 </button>
               )}
-              {view === 'schedule' && <button onClick={handleGenerate} disabled={generating || staff.length === 0}
+              {view === 'schedule' && <button onClick={handleGenerate} disabled={generating || generatorStaff.length === 0}
                 title={workflowMode === WORKFLOW_MODE_EXISTING ? 'Valfritt: låt appen pussla ett nytt schemaförslag om du vill jämföra med ditt befintliga schema.' : 'Låt appen pussla fram tre schemaförslag utifrån regler och bemanning.'}
                 className="px-4 py-2 rounded-full text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2 disabled:opacity-50">
                 <Wand2 size={14} />
@@ -4345,8 +4379,8 @@ function FritidsSchemaApp() {
             />}
             {(view === 'schedule' || view === 'drift') && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-          <StatCard label="Personal" value={staff.length} sub="aktiva" />
-          <StatCard label="Veckotimmar tot." value={minToHM(staff.reduce((a, s) => a + weeklyMinutes(s, fridayCycleWeeks, fridayTemplateRotation), 0))}
+          <StatCard label="Personal" value={view === 'schedule' ? generatorStaff.length : staff.length} sub={view === 'schedule' && generatorExcludedCount > 0 ? `${generatorExcludedCount} lärare avskilda` : 'aktiva'} />
+          <StatCard label="Veckotimmar tot." value={minToHM((view === 'schedule' ? generatorStaff : staff).reduce((a, s) => a + weeklyMinutes(s, fridayCycleWeeks, fridayTemplateRotation), 0))}
             tooltip="Summan av all schemalagd arbetstid på arbetsplatsen. På pass längre än 5 timmar dras 30 min rast av i timräkningen." />
           <StatCard label="Underbemannade tillfällen" value={dayData.totalGaps} sub={`på ${activeDay === 'fri' ? 'fredag' : DAYS.find(d => d.key === activeDay).label.toLowerCase()}`}
             highlight={dayData.totalGaps > 0 ? 'warn' : 'ok'} />
@@ -4357,7 +4391,7 @@ function FritidsSchemaApp() {
 
         {view === 'schedule' && (<WorkflowModePanel
           workflowMode={workflowMode}
-          staffCount={staff.length}
+          staffCount={generatorStaff.length}
           onChangeMode={activateWorkflowMode}
           onOpenView={setView}
           onOpenFile={openFile}
@@ -4374,7 +4408,7 @@ function FritidsSchemaApp() {
 
         {view === 'schedule' && (
           <ScheduleView dayData={dayData} activeDay={activeDay} setActiveDay={setActiveDay} onEdit={setEditingId}
-            staffCount={staff.length} onGoToStaff={() => setView('staff')} onLoadExample={loadExample}
+            staffCount={generatorStaff.length} generatorExcludedCount={generatorExcludedCount} onGoToStaff={() => setView('staff')} onLoadExample={loadExample}
             departments={departments} passBank={passBank}
             coverageBlocks={normalizedCoverageBlocks}
             onOpenView={setView}
@@ -4489,7 +4523,7 @@ function FritidsSchemaApp() {
       {generating && <GenerationModal progress={generationProgress} />}
 
       {alternatives && (
-        <AlternativesModal alternatives={alternatives} currentStaff={staff} coverageScopes={coverageScopes} fridayCycleWeeks={fridayCycleWeeks} fridayTemplateRotation={fridayTemplateRotation}
+        <AlternativesModal alternatives={alternatives} currentStaff={generatorStaff} coverageScopes={coverageScopes} fridayCycleWeeks={fridayCycleWeeks} fridayTemplateRotation={fridayTemplateRotation}
           departments={departments}
           onApply={applyAlternative} onClose={() => setAlternatives(null)} />
       )}
@@ -8073,7 +8107,7 @@ function FeasibilityPanel({ issues, onGoToRules }) {
   );
 }
 
-function GeneratorPrerequisitesBanner({ staffCount, passBankCount, coverageCount, onOpenView, onGenerate, generating }) {
+function GeneratorPrerequisitesBanner({ staffCount, generatorExcludedCount = 0, passBankCount, coverageCount, onOpenView, onGenerate, generating }) {
   // Tre förutsättningar för att Schemagenerator ska kunna pussla något vettigt.
   // Visa allt i en banner ovanför listan så användaren ser status och kan klicka
   // sig direkt till rätt flik. När alla tre är OK aktiveras Generera-knappen.
@@ -8081,8 +8115,8 @@ function GeneratorPrerequisitesBanner({ staffCount, passBankCount, coverageCount
     {
       key: 'staff',
       ok: staffCount > 0,
-      okLabel: `Personal tillagd (${staffCount} ${staffCount === 1 ? 'person' : 'personer'})`,
-      missingLabel: 'Ingen personal är tillagd ännu',
+      okLabel: `Fritidspersonal tillagd (${staffCount} ${staffCount === 1 ? 'person' : 'personer'})`,
+      missingLabel: 'Ingen fritidspersonal kan genereras ännu',
       action: 'Gå till Personal',
       view: 'staff',
     },
@@ -8146,12 +8180,17 @@ function GeneratorPrerequisitesBanner({ staffCount, passBankCount, coverageCount
           </div>
         ))}
       </div>
+      {generatorExcludedCount > 0 && (
+        <p className="mt-3 text-xs text-stone-500">
+          {generatorExcludedCount} {generatorExcludedCount === 1 ? 'person' : 'personer'} med lärarroll är avskild från Schemageneratorn och används i stället i Personligt schema, Uppdrag, Skola och Drift.
+        </p>
+      )}
     </div>
   );
 }
 
 function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, onGoToStaff, onLoadExample, departments, passBank,
-                        coverageBlocks = [], onOpenView, onGenerate, generating = false,
+                        generatorExcludedCount = 0, coverageBlocks = [], onOpenView, onGenerate, generating = false,
                         fridayCycleWeeks, currentFridayWeek, setCurrentFridayWeek, hasFridaySetup,
                         fridayTemplateRotation = [], onUpdateShift,
                         baselineStaff = null, onResetShift, onResetAll }) {
@@ -8319,9 +8358,9 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
   if (staffCount === 0) {
     return (
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-12 text-center">
-        <div className="display-font text-2xl text-stone-800 mb-2">Inget schema än</div>
+        <div className="display-font text-2xl text-stone-800 mb-2">Ingen fritidspersonal i generatorn än</div>
         <p className="text-sm text-stone-500 mb-6 max-w-md mx-auto">
-          Lägg till personalen som ska schemaläggas. Om du redan har ett schema kan du sedan skriva in tiderna direkt här i Vecka. Om du vill ha hjälp att pussla använder du passbank, regler och generatorn.
+          Lägg till personalen som ska ingå i fritidsschemat, eller ändra befattning på de personer som ska kunna pusslas av Schemageneratorn. Renodlade lärare hanteras i Personligt schema, Uppdrag, Skola och Drift.
         </p>
         <div className="flex gap-2 justify-center">
           <button onClick={onGoToStaff} className="px-5 py-2.5 rounded-lg bg-stone-800 text-white hover:bg-stone-900 transition text-sm flex items-center gap-2">
@@ -8338,10 +8377,11 @@ function ScheduleView({ dayData, activeDay, setActiveDay, onEdit, staffCount, on
   return (
     <div className="space-y-4">
       <TabIntro>
-        Schemageneratorn är ett verktyg för att bygga personalschema för fritidshemmet. Den pusslar fram grundschema utifrån personal, passbank och bemanningskrav. När grunden sitter fortsätter du i Personligt schema och Uppdrag för att lägga på lektioner, rastvärd, planering och driftregler.
+        Schemageneratorn är ett verktyg för att bygga personalschema för fritidshemmet. Den använder personal som inte har ren lärarroll, pusslar fram grundschema utifrån passbank och bemanningskrav, och lämnar lärares scheman till Personligt schema, Uppdrag, Skola och Drift.
       </TabIntro>
       <GeneratorPrerequisitesBanner
         staffCount={staffCount}
+        generatorExcludedCount={generatorExcludedCount}
         passBankCount={Array.isArray(passBank) ? passBank.length : 0}
         coverageCount={Array.isArray(coverageBlocks) ? coverageBlocks.length : 0}
         onOpenView={onOpenView}
@@ -8737,9 +8777,14 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Filtrera personal</p>
             <p className="text-sm text-stone-600">Visa bara den grupp du arbetar med just nu. Filtret påverkar bara listan här, inte schemat eller generatorn.</p>
           </div>
-          <input type="search" value={staffSearch} onChange={e => setStaffSearch(e.target.value)}
-            placeholder="Sök namn, roll, avdelning..."
-            className="px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 min-w-[260px]" />
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={onAdd} className="px-4 py-2 rounded-lg bg-stone-800 text-white hover:bg-stone-900 transition text-sm flex items-center gap-2">
+              <Plus size={14} />Lägg till personal
+            </button>
+            <input type="search" value={staffSearch} onChange={e => setStaffSearch(e.target.value)}
+              placeholder="Sök namn, roll, avdelning..."
+              className="px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 min-w-[260px]" />
+          </div>
         </div>
         <div className="flex gap-1 p-1 rounded-xl bg-stone-100 overflow-x-auto">
           {roleFilterOptions.map(option => (
@@ -13661,6 +13706,16 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 function WhatsNewModal({ onClose }) {
   const updates = [
     {
+      version: 'v101',
+      title: 'Säkrare Schemagenerator',
+      body: 'Generatorns förslag fungerar mer som en fritidsverkstad: förhandsgranskningen jämför bara fritidspersonalen, och när ett alternativ skrivs in bevaras lärare, uppdrag, skoldel och driftdata. En bekräftelse visar exakt vad som påverkas.',
+    },
+    {
+      version: 'v100',
+      title: 'Tydligare gräns för Schemageneratorn',
+      body: 'Schemageneratorn räknar nu bara med personal som inte har ren lärarroll. Lärare ligger kvar i Personligt schema, Uppdrag, Skola och Drift. Personal-sidan har också fått en tydlig Lägg till personal-knapp högst upp.',
+    },
+    {
       version: 'v99',
       title: 'Renare Personal-sida',
       body: 'Personal fokuserar nu på personer, roller, arbetstider och passregler. Generatorns arbetsflöde och fredagscykelns stora hjälpytor ligger kvar under Schemagenerator/Verktyg i stället för att ta plats på Personal.',
@@ -13945,8 +14000,8 @@ function AlternativesModal({ alternatives, currentStaff, coverageScopes, fridayC
       <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="sticky top-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between z-10">
           <div>
-            <h2 className="display-font text-2xl text-stone-800">Tre schemaförslag</h2>
-            <p className="text-xs text-stone-500 mt-0.5">Klicka på ett kort för att förhandsgranska, "Tillämpa" för att använda. Vardagar följer passbanken och fredag räknas med som snitt över rullen.</p>
+            <h2 className="display-font text-2xl text-stone-800">Tre fritidsförslag</h2>
+            <p className="text-xs text-stone-500 mt-0.5">Förslagen är en separat verkstad för fritidspersonal. De påverkar inte lärare, uppdrag, skoldel eller driftdata förrän du väljer att skriva in ett alternativ.</p>
           </div>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-700"><X size={20} /></button>
         </div>
@@ -14005,6 +14060,9 @@ function AlternativesModal({ alternatives, currentStaff, coverageScopes, fridayC
             <span>·</span>
             <span>tot. <span style={{ fontWeight: 500 }}>{minToHM(currentSummary.totalHourDev)}</span> avvikelse</span>
           </div>
+          <div className="bg-amber-50 ring-1 ring-amber-200 rounded-xl p-3 mb-6 text-xs text-amber-900">
+            <span style={{ fontWeight: 600 }}>Skydd:</span> Tillämpar du förslaget ersätts arbetspassen för fritidspersonalen i förhandsgranskningen. Övriga personer och alla uppdrag ligger kvar.
+          </div>
 
           {/* Preview of selected */}
           <PreviewSchedule staff={alternatives[previewIdx].staff} originalStaff={currentStaff} coverageScopes={coverageScopes} departments={departments} />
@@ -14013,7 +14071,7 @@ function AlternativesModal({ alternatives, currentStaff, coverageScopes, fridayC
             <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg text-stone-600 hover:bg-stone-100 transition">Avbryt</button>
             <button onClick={() => onApply(alternatives[previewIdx])}
               className="px-5 py-2 text-sm rounded-lg bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2">
-              <Wand2 size={14} />Tillämpa alternativ {previewIdx + 1}
+              <Wand2 size={14} />Skriv in alternativ {previewIdx + 1}
             </button>
           </div>
         </div>
