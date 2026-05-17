@@ -4167,7 +4167,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v92</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v93</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -6792,7 +6792,7 @@ function PersonalScheduleView({
                   {/* Höger: dag-grid med alla blocks */}
                   <div
                     ref={gridRef}
-                    className={`relative rounded-xl bg-stone-50 ring-1 ring-stone-200 overflow-hidden select-none ${altPressed ? 'cursor-copy' : ''}`}
+                    className={`relative rounded-xl bg-stone-50 ring-1 ring-stone-200 overflow-visible select-none ${altPressed ? 'cursor-copy' : ''}`}
                     style={{ height: `${GRID_HEIGHT}px` }}
                   >
                     {/* Tim-rader (bakgrund) */}
@@ -6874,12 +6874,20 @@ function PersonalScheduleView({
                         const collisionCount = getCollisionCount(task, checkDayKey, visualStart, visualEnd);
                         const hasCollision = collisionCount > 0;
                         const duration = visualEnd - visualStart;
-                        const isCompact = duration < 30; // < 30 min: kompakt layout
+                        // Tre storlekstier — bestäm content-layout och drag-kant-tjocklek.
+                        // tiny: bara klockslag, ingen label. small: klockslag + label. normal: full info.
+                        const tier = duration < 22 ? 'tiny' : duration < 42 ? 'small' : 'normal';
+                        const isTiny = tier === 'tiny';
+                        const isSmall = tier === 'small';
+                        const handleHeight = isTiny ? 'h-1' : isSmall ? 'h-1.5' : 'h-2';
+                        // Hover-popup placering: höger om blocket för kolumn 0–2, vänster för 3–4.
+                        // Då hamnar popupen alltid inom grid-arean och täcker inte sin egen kolumn.
+                        const popupOnLeft = renderDayIdx >= 3;
                         return (
                           <div key={task.id}
                             onPointerDown={(event) => startTaskDrag(event, task, d.key, 'move')}
                             title={hasCollision ? `Överlappar ${collisionCount} annat block` : `${task.label || meta.label} · ${minToTime(visualStart)}-${minToTime(visualEnd)}`}
-                            className={`group absolute rounded-md ring-1 px-1.5 py-1 hover:shadow-md transition overflow-hidden touch-none cursor-grab active:cursor-grabbing ${preview ? 'z-20 shadow-lg' : 'z-10'} ${preview?.copy ? 'opacity-90' : ''}`}
+                            className={`group absolute rounded-md ring-1 hover:shadow-md transition touch-none cursor-grab active:cursor-grabbing ${preview ? 'z-20 shadow-lg' : 'z-10'} ${preview?.copy ? 'opacity-90' : ''}`}
                             style={{
                               ...toBlockStyle(visualStart, visualEnd, renderDayIdx),
                               borderColor: hasCollision ? '#F59E0B' : visual.borderColor,
@@ -6892,58 +6900,101 @@ function PersonalScheduleView({
                             {/* Övre drag-kant: justera starttid */}
                             <span role="button" aria-label="Dra starttid" tabIndex={0}
                               onPointerDown={(event) => startTaskDrag(event, task, d.key, 'start')}
-                              className="absolute left-0 right-0 top-0 h-2 cursor-ns-resize bg-white/40 hover:bg-white/80 border-b border-white/60" />
+                              className={`absolute left-0 right-0 top-0 ${handleHeight} cursor-ns-resize bg-white/40 hover:bg-white/80 border-b border-white/60 z-10`} />
                             {/* Undre drag-kant: justera sluttid */}
                             <span role="button" aria-label="Dra sluttid" tabIndex={0}
                               onPointerDown={(event) => startTaskDrag(event, task, d.key, 'end')}
-                              className="absolute left-0 right-0 bottom-0 h-2 cursor-ns-resize bg-white/40 hover:bg-white/80 border-t border-white/60" />
-                            {/* Innehåll */}
-                            <div className="pt-1.5 pb-1.5 pointer-events-none">
-                              <span className="block text-[10px] tabular-nums leading-none" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>
-                                {minToTime(visualStart)}–{minToTime(visualEnd)}
-                              </span>
-                              {!isCompact && (
-                                <span className="block text-[11px] leading-tight mt-0.5 break-words" style={{ fontWeight: 600, color: visual.textColor }}>
-                                  {task.label || meta.label}
+                              className={`absolute left-0 right-0 bottom-0 ${handleHeight} cursor-ns-resize bg-white/40 hover:bg-white/80 border-t border-white/60 z-10`} />
+                            {/* Innehåll — wrapper med overflow-hidden så texten inte läcker ut, blocket självt är overflow-visible för popupen. */}
+                            <div className="absolute inset-0 overflow-hidden rounded-md pointer-events-none flex flex-col justify-center px-1.5">
+                              {isTiny ? (
+                                <span className="text-[9px] tabular-nums leading-tight truncate" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>
+                                  {minToTime(visualStart)}–{minToTime(visualEnd)}
                                 </span>
-                              )}
-                              {!isCompact && task.target && (
-                                <span className="block text-[10px] leading-tight text-stone-500 mt-0.5 break-words">
-                                  {task.target}
-                                </span>
+                              ) : isSmall ? (
+                                <>
+                                  <span className="block text-[10px] tabular-nums leading-none truncate" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>
+                                    {minToTime(visualStart)}–{minToTime(visualEnd)}
+                                  </span>
+                                  <span className="block text-[10px] leading-tight mt-0.5 truncate" style={{ fontWeight: 600, color: visual.textColor }}>
+                                    {task.label || meta.label}
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="block text-[10px] tabular-nums leading-none" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>
+                                    {minToTime(visualStart)}–{minToTime(visualEnd)}
+                                  </span>
+                                  <span className="block text-[11px] leading-tight mt-0.5 break-words" style={{ fontWeight: 600, color: visual.textColor }}>
+                                    {task.label || meta.label}
+                                  </span>
+                                  {task.target && (
+                                    <span className="block text-[10px] leading-tight text-stone-500 mt-0.5 break-words">
+                                      {task.target}
+                                    </span>
+                                  )}
+                                </>
                               )}
                             </div>
-                            {/* Hover-knappar: Ändra · Duplicera · Ta bort */}
-                            <div className="absolute right-0.5 top-0.5 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition pointer-events-auto">
-                              <button type="button"
-                                onPointerDown={event => event.stopPropagation()}
-                                onClick={event => { event.stopPropagation(); onOpenAssignmentEditor?.(person.id, d.key); }}
-                                className="rounded bg-white/95 px-1.5 py-0.5 text-[9px] text-stone-700 ring-1 ring-stone-200 hover:bg-white"
-                                title="Öppna finredigering">
-                                Ändra
-                              </button>
-                              <button type="button"
-                                onPointerDown={event => event.stopPropagation()}
-                                onClick={event => { event.stopPropagation(); handleDuplicate(task, d.key); }}
-                                className="rounded bg-white/95 px-1.5 py-0.5 text-[9px] text-stone-700 ring-1 ring-stone-200 hover:bg-white"
-                                title="Skapa en kopia på samma dag">
-                                Dupl.
-                              </button>
-                              <button type="button"
-                                onPointerDown={event => event.stopPropagation()}
-                                onClick={event => { event.stopPropagation(); handleDelete(task, d.key); }}
-                                className="rounded bg-rose-50/95 px-1.5 py-0.5 text-[9px] text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100"
-                                title="Ta bort uppdraget">
-                                Ta bort
-                              </button>
-                            </div>
+                            {/* Floating hover-popup utanför blocket — visar full info + alla tre actions.
+                                Yttre wrappern fyller "gapet" mellan block och visible popup så att hovern inte
+                                bryts när musen rör sig mellan dem. group-hover styr opacity OCH pointer-events. */}
+                            {!preview && (
+                              <div
+                                className="absolute z-40 top-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto focus-within:pointer-events-auto transition"
+                                style={{
+                                  [popupOnLeft ? 'right' : 'left']: '100%',
+                                  width: '216px',
+                                  paddingLeft: popupOnLeft ? '0' : '6px',
+                                  paddingRight: popupOnLeft ? '6px' : '0',
+                                }}
+                                onPointerDown={(event) => event.stopPropagation()}
+                              >
+                                <div className="rounded-lg bg-white shadow-xl ring-1 ring-stone-200 p-2.5">
+                                  <p className="text-xs text-stone-800 break-words" style={{ fontWeight: 600 }}>{task.label || meta.label}</p>
+                                  {task.target && <p className="text-[11px] text-stone-500 break-words mt-0.5">{task.target}</p>}
+                                  <p className="text-[10px] text-stone-500 tabular-nums mt-1.5">
+                                    {minToTime(task.start)}–{minToTime(task.end)} · {duration} min · {getDayMeta(d.key).label}
+                                  </p>
+                                  {hasCollision && (
+                                    <p className="text-[10px] text-amber-800 mt-1.5 rounded bg-amber-50 ring-1 ring-amber-200 px-1.5 py-0.5">
+                                      Krockar med {collisionCount} {collisionCount === 1 ? 'annat block' : 'andra block'}
+                                    </p>
+                                  )}
+                                  <div className="flex gap-1 mt-2 pt-2 border-t border-stone-100">
+                                    <button type="button"
+                                      onPointerDown={event => event.stopPropagation()}
+                                      onClick={event => { event.stopPropagation(); onOpenAssignmentEditor?.(person.id, d.key); }}
+                                      className="flex-1 rounded bg-white px-2 py-1 text-[10px] text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50"
+                                      title="Öppna finredigering">
+                                      Ändra
+                                    </button>
+                                    <button type="button"
+                                      onPointerDown={event => event.stopPropagation()}
+                                      onClick={event => { event.stopPropagation(); handleDuplicate(task, d.key); }}
+                                      className="flex-1 rounded bg-white px-2 py-1 text-[10px] text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50"
+                                      title="Skapa en kopia på samma dag">
+                                      Duplicera
+                                    </button>
+                                    <button type="button"
+                                      onPointerDown={event => event.stopPropagation()}
+                                      onClick={event => { event.stopPropagation(); handleDelete(task, d.key); }}
+                                      className="rounded bg-rose-50 px-2 py-1 text-[10px] text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100 inline-flex items-center justify-center"
+                                      title="Ta bort uppdraget"
+                                      aria-label="Ta bort uppdraget">
+                                      <Trash2 size={11} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                             {preview && (
-                              <span className="absolute left-1/2 -translate-x-1/2 -top-6 rounded-full bg-stone-900 text-white text-[10px] px-2 py-0.5 tabular-nums shadow whitespace-nowrap">
+                              <span className="absolute left-1/2 -translate-x-1/2 -top-6 rounded-full bg-stone-900 text-white text-[10px] px-2 py-0.5 tabular-nums shadow whitespace-nowrap z-30">
                                 {preview.copy ? '⊕ ' : ''}{minToTime(visualStart)}–{minToTime(visualEnd)}{preview.previewDayKey !== preview.originDayKey ? ` · ${getDayMeta(preview.previewDayKey).short}` : ''}
                               </span>
                             )}
-                            {hasCollision && !isCompact && (
-                              <span className="absolute left-1 bottom-0.5 rounded-full bg-amber-100 text-amber-800 ring-1 ring-amber-300 px-1.5 py-0 text-[9px]" style={{ fontWeight: 700 }}>
+                            {hasCollision && !isTiny && !isSmall && (
+                              <span className="absolute left-1 bottom-0.5 rounded-full bg-amber-100 text-amber-800 ring-1 ring-amber-300 px-1.5 py-0 text-[9px] z-10" style={{ fontWeight: 700 }}>
                                 Krock
                               </span>
                             )}
@@ -13123,6 +13174,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v93',
+      title: 'Smala block fungerar nu — klockslag och knappar i hover-popup',
+      body: 'Block under 22 minuter visar bara klockslaget på en rad och får tunnare drag-kanter så texten ryms. Hover-knapparna (Ändra · Duplicera · Ta bort) ligger nu i en flytande panel utanför blocket, oavsett storlek. Panelen visar också full etikett, target, tidsspann och duration.',
+    },
     {
       version: 'v92',
       title: 'Personligt schema som veckogrid',
