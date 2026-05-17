@@ -3528,7 +3528,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 43,
+    version: 44,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4212,7 +4212,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v98</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v99</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4290,7 +4290,7 @@ function FritidsSchemaApp() {
                   Spara som...
                 </button>
               )}
-              {view !== 'home' && view !== 'school' && <button onClick={handleGenerate} disabled={generating || staff.length === 0}
+              {view === 'schedule' && <button onClick={handleGenerate} disabled={generating || staff.length === 0}
                 title={workflowMode === WORKFLOW_MODE_EXISTING ? 'Valfritt: låt appen pussla ett nytt schemaförslag om du vill jämföra med ditt befintliga schema.' : 'Låt appen pussla fram tre schemaförslag utifrån regler och bemanning.'}
                 className="px-4 py-2 rounded-full text-sm bg-stone-800 text-white hover:bg-stone-900 transition flex items-center gap-2 disabled:opacity-50">
                 <Wand2 size={14} />
@@ -4355,7 +4355,7 @@ function FritidsSchemaApp() {
         </div>
             )}
 
-        {(view === 'schedule' || view === 'staff') && (<WorkflowModePanel
+        {view === 'schedule' && (<WorkflowModePanel
           workflowMode={workflowMode}
           staffCount={staff.length}
           onChangeMode={activateWorkflowMode}
@@ -4363,7 +4363,7 @@ function FritidsSchemaApp() {
           onOpenFile={openFile}
         />)}
 
-        {(view === 'schedule' || view === 'drift' || view === 'staff') && (<FridayCycleBanner
+        {(view === 'schedule' || view === 'drift') && (<FridayCycleBanner
           fridayCycleWeeks={fridayCycleWeeks}
           currentFridayWeek={currentFridayWeek}
           onOpenSettings={() => setView('friday')}
@@ -8729,7 +8729,7 @@ function StaffView({ staff, fridayCycleWeeks, fridayTemplateRotation, violations
   return (
     <div className="space-y-4">
       <TabIntro>
-        Lägg till och redigera personalen. Börja med reglerna och passurvalet — de styr hur generatorn pusslar. Manuell veckoredigering här är för specialfall; vanligtvis finjusterar man enklast direkt i veckovyn efteråt. Listan visar varje persons mål jämfört med faktisk schemalagd arbetstid på arbetsplatsen efter rastregeln.
+        Lägg till och redigera personer, befattning, avdelning, tjänstgöring, fredagsrutin och arbetstider. Personerna används i Personligt schema, Uppdrag, Drift och Schemagenerator. Klicka på en person för detaljer och passregler.
       </TabIntro>
       <div className="bg-white rounded-2xl ring-1 ring-stone-200 p-4 flex flex-col gap-3">
         <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -13660,6 +13660,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v99',
+      title: 'Renare Personal-sida',
+      body: 'Personal fokuserar nu på personer, roller, arbetstider och passregler. Generatorns arbetsflöde och fredagscykelns stora hjälpytor ligger kvar under Schemagenerator/Verktyg i stället för att ta plats på Personal.',
+    },
     {
       version: 'v98',
       title: 'Tydligare rum och startpanel',
