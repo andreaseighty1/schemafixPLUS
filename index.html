@@ -4167,7 +4167,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v91</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v92</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4295,6 +4295,7 @@ function FritidsSchemaApp() {
               onOpenAssignmentEditor={openAssignmentEditor}
               onUpdateAssignment={updateSchoolPosition}
               onDeleteAssignment={deleteSchoolPosition}
+              onAddAssignment={addSchoolPosition}
             />}
             {(view === 'schedule' || view === 'drift') && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -6320,11 +6321,14 @@ function exportPersonalScheduleToXlsx({ person, assignments, fridayOptions }) {
 }
 
 
-// Personcentrerad veckovy. Visar EN persons EN dag som ett tidsschema där
-// uppdrag är draggbara block. Återanvänder samma assignments-datastruktur
-// som Uppdrag-fliken och Skola-fliken – ingen separat data, allt syns i Drift.
-// Skild från Skolas builder genom att INTE filtrera på skol-uppdrag och INTE
-// filtrera personer till bara lärare/samverkare/resurs. Här syns allt.
+// Personcentrerad veckovy. Visar EN persons HELA vecka som ett vertikalt
+// tidsschema där varje dag är en kolumn och tiden löper neråt (06-18, samma
+// fönster som Excel-exporten). Uppdrag är dragbara block; mitt-drag flyttar i
+// tid OCH mellan dagar, kant-drag (övre/undre) justerar bara tid på samma dag.
+// Alt-tangenten under drag = kopiera istället för flytta. "Duplicera"-knappen
+// på blocket gör samma sak utan kortkommandon. Klick i tom yta öppnar modalen
+// med vald dag förifylld. Återanvänder samma assignments-datastruktur som
+// Uppdrag- och Skola-vyerna — bidirektionell sync är gratis.
 function PersonalScheduleView({
   staff,
   assignments,
@@ -6336,17 +6340,31 @@ function PersonalScheduleView({
   onOpenAssignmentEditor,
   onUpdateAssignment,
   onDeleteAssignment,
+  onAddAssignment,
 }) {
   const [selectedPersonId, setSelectedPersonId] = useState('');
-  const [activeDay, setActiveDay] = useState('mon');
   const [roleFilter, setRoleFilter] = useState('all');
-  // Färgwizard — visas första gången vyn öppnas (innan något block är dragit).
-  // getColorWizardSeen() pekar mot localStorage, så samma användare ser den bara
-  // en gång. Användaren kan starta om wizarden via knapp i toppen av vyn.
+  // Färgwizard — visas första gången vyn öppnas. Användaren kan starta om wizarden via knapp.
   const [showColorWizard, setShowColorWizard] = useState(() => !getColorWizardSeen());
-  const timelineRef = useRef(null);
+  // Spåra Alt-tangent globalt så cursor och hint kan visa "kopiera"-läget i förväg.
+  const [altPressed, setAltPressed] = useState(false);
+  const gridRef = useRef(null);
   const dragPreviewRef = useRef(null);
   const [dragPreview, setDragPreview] = useState(null);
+
+  useEffect(() => {
+    const onDown = (e) => { if (e.altKey) setAltPressed(true); };
+    const onUp = (e) => { if (!e.altKey) setAltPressed(false); };
+    const onBlur = () => setAltPressed(false);
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
 
   const roleMatchesFilter = (person, filter) => {
     if (filter === 'all') return true;
@@ -6357,132 +6375,261 @@ function PersonalScheduleView({
     () => staff.filter(person => roleMatchesFilter(person, roleFilter)),
     [staff, roleFilter]
   );
-
-  // Hitta vald person (fallback till första i listan om det inte finns en explicit val)
   const person = staff.find(p => String(p.id) === String(selectedPersonId))
     || peopleToShow[0]
     || null;
-  const fridayWeek = activeDay === 'fri' ? currentFridayWeek : 1;
-  const fridayOptions = { fridayWeek, cycleWeeks: fridayCycleWeeks, fridayTemplateRotation };
-  const shift = person ? getShiftForDay(person, activeDay, fridayOptions) : null;
-  const tasks = useMemo(
-    () => person ? getAssignmentsForDay(assignments, person.id, activeDay, fridayOptions) : [],
-    [person, assignments, activeDay, fridayWeek, fridayCycleWeeks, fridayTemplateRotation]
-  );
 
-  // Timeline-konstanter (samma som Skolas builder)
-  const timelineStart = 7 * 60;
-  const timelineEnd = 17 * 60;
-  const timelineSpan = timelineEnd - timelineStart;
-  const timelineStep = 5;
-  const toTimelineStyle = (start, end) => {
-    const safeStart = Math.max(timelineStart, Math.min(timelineEnd - 10, start ?? timelineStart));
-    const safeEnd = Math.max(safeStart + 10, Math.min(timelineEnd, end ?? safeStart + 10));
+  // Timeline-konstanter — matchar Excel-exporten exakt så att vy och fil ser likadana ut.
+  const TIMELINE_START = 6 * 60;   // 06:00
+  const TIMELINE_END = 18 * 60;    // 18:00
+  const TIMELINE_SPAN = TIMELINE_END - TIMELINE_START; // 720 min
+  const TIMELINE_STEP = 5;         // snäpp till 5-min-intervall
+  const HOUR_HEIGHT = 56;          // px per timme i griden
+  const GRID_HEIGHT = (TIMELINE_SPAN / 60) * HOUR_HEIGHT; // ~672 px
+
+  // Hela veckans data per dag: shift + tasks. fridayWeek påverkar fre, övriga får 1.
+  const weekDayList = DAY_META; // [mon, tue, wed, thu, fri]
+  const dayDataList = useMemo(() => {
+    if (!person) return weekDayList.map(d => ({ ...d, shift: null, tasks: [] }));
+    return weekDayList.map(d => {
+      const fridayOptions = {
+        fridayWeek: d.key === 'fri' ? currentFridayWeek : 1,
+        cycleWeeks: fridayCycleWeeks,
+        fridayTemplateRotation,
+      };
+      return {
+        ...d,
+        shift: getShiftForDay(person, d.key, fridayOptions),
+        tasks: getAssignmentsForDay(assignments, person.id, d.key, fridayOptions),
+      };
+    });
+  }, [person, assignments, currentFridayWeek, fridayCycleWeeks, fridayTemplateRotation, weekDayList]);
+  const dayDataByKey = useMemo(() => {
+    const map = {};
+    for (const d of dayDataList) map[d.key] = d;
+    return map;
+  }, [dayDataList]);
+
+  // Pekarposition → minute (Y) och dagindex (X) inom dag-griden (exklusive tid-spalt).
+  const getMinuteFromY = (clientY) => {
+    const rect = gridRef.current?.getBoundingClientRect();
+    if (!rect || rect.height <= 0) return TIMELINE_START;
+    const ratio = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    return roundToStep(TIMELINE_START + ratio * TIMELINE_SPAN);
+  };
+  const getDayIdxFromX = (clientX) => {
+    const rect = gridRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return 0;
+    const ratio = Math.max(0, Math.min(0.9999, (clientX - rect.left) / rect.width));
+    return Math.floor(ratio * weekDayList.length);
+  };
+
+  // Position-stil för ett block: top/height i procent av griden, left/width i procent av dag-arean.
+  const toBlockStyle = (start, end, dayIdx) => {
+    const safeStart = Math.max(TIMELINE_START, Math.min(TIMELINE_END - TIMELINE_STEP, start));
+    const safeEnd = Math.max(safeStart + TIMELINE_STEP, Math.min(TIMELINE_END, end));
     return {
-      left: `${((safeStart - timelineStart) / timelineSpan) * 100}%`,
-      width: `${Math.max(5, ((safeEnd - safeStart) / timelineSpan) * 100)}%`,
+      top: `${((safeStart - TIMELINE_START) / TIMELINE_SPAN) * 100}%`,
+      height: `${Math.max(1.5, ((safeEnd - safeStart) / TIMELINE_SPAN) * 100)}%`,
+      left: `${(dayIdx / weekDayList.length) * 100}%`,
+      width: `${100 / weekDayList.length}%`,
     };
   };
-  const getPointerMinute = (clientX) => {
-    const rect = timelineRef.current?.getBoundingClientRect();
-    if (!rect || rect.width <= 0) return timelineStart;
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    return roundToStep(timelineStart + ratio * timelineSpan);
-  };
-  const getCollisionCount = (task, start = task?.start, end = task?.end) => {
+
+  // Krock-räkning per dag.
+  const getCollisionCount = (task, dayKey, start = task?.start, end = task?.end) => {
     if (!task) return 0;
-    return tasks.filter(other =>
+    const dayTasks = dayDataByKey[dayKey]?.tasks || [];
+    return dayTasks.filter(other =>
       other.id !== task.id && intervalsOverlap(other.start, other.end, start, end)
     ).length;
   };
 
-  // Drag-mekanik (samma princip som Skolas builder)
-  const startTaskDrag = (event, task, mode = 'move') => {
-    if (!person || !shift || !task?.id) return;
+  // Drag start. mode: 'move' | 'start' | 'end'. Resize-mode låser X (ingen dagsbyte).
+  const startTaskDrag = (event, task, dayKey, mode = 'move') => {
+    if (!person || !task?.id) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.currentTarget?.setPointerCapture && event.pointerId != null) {
       try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
     }
-    const shiftStart = timeToMin(shift[0]);
-    const shiftEnd = timeToMin(shift[1]);
+    const dayIdx = weekDayList.findIndex(d => d.key === dayKey);
     const nextPreview = {
-      personId: String(person.id),
-      dayKey: activeDay,
       taskId: task.id,
+      originDayKey: dayKey,
+      originDayIdx: dayIdx,
       mode,
-      originMinute: getPointerMinute(event.clientX),
+      copy: !!event.altKey,
+      originMinute: getMinuteFromY(event.clientY),
       start: task.start,
       end: task.end,
       previewStart: task.start,
       previewEnd: task.end,
-      shiftStart,
-      shiftEnd,
+      previewDayKey: dayKey,
+      previewDayIdx: dayIdx,
+      taskSnapshot: { ...task },
     };
     dragPreviewRef.current = nextPreview;
     setDragPreview(nextPreview);
   };
+
   useEffect(() => {
     if (!dragPreview) return;
     const updatePreview = (event) => {
-      const currentMinute = getPointerMinute(event.clientX);
+      const currentMinute = getMinuteFromY(event.clientY);
+      const currentDayIdx = getDayIdxFromX(event.clientX);
       const delta = roundToStep(currentMinute - dragPreview.originMinute);
-      const minDuration = timelineStep;
+
       let nextStart = dragPreview.start;
       let nextEnd = dragPreview.end;
+      let nextDayKey = dragPreview.originDayKey;
+      let nextDayIdx = dragPreview.originDayIdx;
+      const minDuration = TIMELINE_STEP;
+
       if (dragPreview.mode === 'start') {
-        const maxStart = Math.max(dragPreview.shiftStart, dragPreview.end - minDuration);
-        nextStart = clamp(roundToStep(dragPreview.start + delta), dragPreview.shiftStart, maxStart);
+        const maxStart = Math.max(TIMELINE_START, dragPreview.end - minDuration);
+        nextStart = clamp(roundToStep(dragPreview.start + delta), TIMELINE_START, maxStart);
       } else if (dragPreview.mode === 'end') {
-        const minEnd = Math.min(dragPreview.shiftEnd, dragPreview.start + minDuration);
-        nextEnd = clamp(roundToStep(dragPreview.end + delta), minEnd, dragPreview.shiftEnd);
+        const minEnd = Math.min(TIMELINE_END, dragPreview.start + minDuration);
+        nextEnd = clamp(roundToStep(dragPreview.end + delta), minEnd, TIMELINE_END);
       } else {
+        // move: tillåt både tids- och dagsbyte
         const duration = Math.max(minDuration, dragPreview.end - dragPreview.start);
-        const maxStart = Math.max(dragPreview.shiftStart, dragPreview.shiftEnd - duration);
-        nextStart = clamp(roundToStep(dragPreview.start + delta), dragPreview.shiftStart, maxStart);
+        const maxStart = TIMELINE_END - duration;
+        nextStart = clamp(roundToStep(dragPreview.start + delta), TIMELINE_START, maxStart);
         nextEnd = nextStart + duration;
+        nextDayIdx = clamp(currentDayIdx, 0, weekDayList.length - 1);
+        nextDayKey = weekDayList[nextDayIdx].key;
       }
+
       setDragPreview(prev => {
         if (!prev) return prev;
-        const next = { ...prev, previewStart: nextStart, previewEnd: nextEnd };
+        const next = {
+          ...prev,
+          previewStart: nextStart,
+          previewEnd: nextEnd,
+          previewDayKey: nextDayKey,
+          previewDayIdx: nextDayIdx,
+          copy: !!event.altKey,
+        };
         dragPreviewRef.current = next;
         return next;
       });
     };
-    const finishDrag = () => {
+
+    const finishDrag = (event) => {
       const latest = dragPreviewRef.current || dragPreview;
-      const changed = latest.previewStart !== latest.start || latest.previewEnd !== latest.end;
-      if (changed) {
+      const changedTime = latest.previewStart !== latest.start || latest.previewEnd !== latest.end;
+      const changedDay = latest.previewDayKey !== latest.originDayKey;
+      const copy = !!(event?.altKey || latest.copy);
+
+      if (latest.mode === 'start' || latest.mode === 'end') {
+        // Resize påverkar bara tid på samma dag.
+        if (changedTime) {
+          onUpdateAssignment?.({
+            personId: person.id,
+            dayKey: latest.originDayKey,
+            taskId: latest.taskId,
+            patch: {
+              start: latest.previewStart,
+              end: latest.previewEnd,
+              durationMinutes: Math.max(TIMELINE_STEP, latest.previewEnd - latest.previewStart),
+            },
+          });
+        }
+      } else if (copy && (changedTime || changedDay)) {
+        // Kopiera: behåll originalet, lägg till en kopia på preview-platsen.
+        const targetHasShift = !!dayDataByKey[latest.previewDayKey]?.shift;
+        if (!targetHasShift) {
+          // Måldagen saknar pass — addSchoolPosition skulle avvisa. Snäpp tillbaka tyst.
+        } else if (onAddAssignment) {
+          const newTask = {
+            ...latest.taskSnapshot,
+            id: undefined,
+            start: latest.previewStart,
+            end: latest.previewEnd,
+            durationMinutes: latest.previewEnd - latest.previewStart,
+          };
+          onAddAssignment({ personId: person.id, dayKey: latest.previewDayKey, task: newTask });
+        }
+      } else if (!copy && changedDay) {
+        // Flytta över dagsgräns: kontrollera mål-shift först. Annars riskerar vi att radera utan att kunna skapa.
+        const targetHasShift = !!dayDataByKey[latest.previewDayKey]?.shift;
+        if (targetHasShift && onAddAssignment) {
+          const newTask = {
+            ...latest.taskSnapshot,
+            id: undefined,
+            start: latest.previewStart,
+            end: latest.previewEnd,
+            durationMinutes: latest.previewEnd - latest.previewStart,
+          };
+          onDeleteAssignment?.({ personId: person.id, dayKey: latest.originDayKey, taskId: latest.taskId });
+          onAddAssignment({ personId: person.id, dayKey: latest.previewDayKey, task: newTask });
+        }
+        // Om måldagen saknar pass: snäpp tillbaka tyst.
+      } else if (changedTime) {
         onUpdateAssignment?.({
-          personId: latest.personId,
-          dayKey: latest.dayKey,
+          personId: person.id,
+          dayKey: latest.originDayKey,
           taskId: latest.taskId,
           patch: {
             start: latest.previewStart,
             end: latest.previewEnd,
-            durationMinutes: Math.max(timelineStep, latest.previewEnd - latest.previewStart),
+            durationMinutes: latest.previewEnd - latest.previewStart,
           },
         });
       }
+
       dragPreviewRef.current = null;
       setDragPreview(null);
     };
+
     window.addEventListener('pointermove', updatePreview);
     window.addEventListener('pointerup', finishDrag, { once: true });
     return () => {
       window.removeEventListener('pointermove', updatePreview);
       window.removeEventListener('pointerup', finishDrag);
     };
-  }, [dragPreview, onUpdateAssignment]);
+  }, [dragPreview, onUpdateAssignment, onDeleteAssignment, onAddAssignment, person, dayDataByKey]);
 
-  const handleDelete = (task) => {
+  // Klick i tom dag-yta → öppna modalen med dagens nyckel.
+  const handleEmptyDayClick = (dayKey) => {
+    if (!person) return;
+    onOpenAssignmentEditor?.(person.id, dayKey);
+  };
+
+  // Duplicera direkt via knapp (alternativ till Alt-drag).
+  const handleDuplicate = (task, dayKey) => {
+    if (!person || !task || !onAddAssignment) return;
+    // Förskjut 5 min så kopian är synligt skild från originalet.
+    const offset = TIMELINE_STEP;
+    const start = Math.min(TIMELINE_END - TIMELINE_STEP, task.start + offset);
+    const end = Math.min(TIMELINE_END, task.end + offset);
+    onAddAssignment({
+      personId: person.id,
+      dayKey,
+      task: {
+        ...task,
+        id: undefined,
+        start,
+        end,
+        durationMinutes: end - start,
+      },
+    });
+  };
+
+  const handleDelete = (task, dayKey) => {
     if (!person || !task?.id) return;
-    if (!confirm(`Ta bort "${task.label || inferAssignmentLabel(task.type)}" från ${getDayMeta(activeDay).label.toLowerCase()}?`)) return;
-    onDeleteAssignment?.({ personId: person.id, dayKey: activeDay, taskId: task.id });
+    if (!confirm(`Ta bort "${task.label || inferAssignmentLabel(task.type)}" från ${getDayMeta(dayKey).label.toLowerCase()}?`)) return;
+    onDeleteAssignment?.({ personId: person.id, dayKey, taskId: task.id });
   };
 
   const dept = person ? getDept(person.deptId, departments) : null;
   const roleLabel = person ? getStaffRoleLabel(person.employmentRole) : '';
+
+  // Tim-rader för bakgrundsgrid + tid-spalten.
+  const hourMarks = [];
+  for (let m = TIMELINE_START; m <= TIMELINE_END; m += 60) hourMarks.push(m);
 
   return (
     <div className="space-y-6">
@@ -6490,7 +6637,7 @@ function PersonalScheduleView({
         <ColorWizardModal onClose={() => setShowColorWizard(false)} />
       )}
       <TabIntro>
-        Bygg en persons vecka som ett tidsschema — dra block för att flytta, dra i kanterna för att korta eller förlänga. Allt sparas som vanliga uppdrag och syns automatiskt i Drift om personen blir frånvarande.
+        Bygg en persons hela vecka som ett vertikalt schema — tid neråt, dagarna som kolumner. Dra block för att flytta i tid eller mellan dagar. Dra i över- eller underkanten för att korta/förlänga. Håll <kbd className="px-1 py-0.5 rounded bg-stone-200 text-[10px]">Alt</kbd> medan du drar för att kopiera istället. Allt sparas som vanliga uppdrag och syns automatiskt i Uppdrag, Skola och Drift.
       </TabIntro>
 
       <div className="flex items-center justify-end gap-3 flex-wrap -mt-3">
@@ -6517,13 +6664,13 @@ function PersonalScheduleView({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[0.85fr,1.15fr] gap-4">
-        {/* Vänster: person + dag-väljare */}
+      <div className="grid grid-cols-1 xl:grid-cols-[0.55fr,1.45fr] gap-4">
+        {/* Vänster: personväljare */}
         <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5 space-y-4">
           <div>
             <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Välj person</p>
             <h3 className="display-font text-2xl text-stone-800">Vem ska du planera för?</h3>
-            <p className="text-sm text-stone-600 mt-1">Filtrera på befattning om listan är lång. Den valda personens vecka visas till höger.</p>
+            <p className="text-sm text-stone-600 mt-1">Filtrera på befattning om listan är lång. Hela personens vecka visas till höger.</p>
           </div>
 
           <div>
@@ -6555,180 +6702,276 @@ function PersonalScheduleView({
             )}
           </div>
 
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Dag</label>
-            <div className="flex gap-1 p-1 rounded-xl bg-stone-100">
-              {DAY_META.map(day => (
-                <button key={day.key} type="button" onClick={() => setActiveDay(day.key)}
-                  className={`flex-1 px-2 py-1.5 rounded-lg text-sm transition ${activeDay === day.key ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-600 hover:text-stone-900'}`}>
-                  {day.short}
-                </button>
-              ))}
+          {fridayCycleWeeks > 1 && (
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-stone-500 block mb-1">Fredagsvecka</label>
+              <select value={currentFridayWeek} onChange={e => setCurrentFridayWeek(parseInt(e.target.value, 10))}
+                className="w-full px-3 py-2 rounded-lg bg-white ring-1 ring-stone-200 text-sm text-stone-700 tabular-nums">
+                {Array.from({ length: fridayCycleWeeks }).map((_, i) => (
+                  <option key={i + 1} value={i + 1}>Vecka {i + 1} av {fridayCycleWeeks}</option>
+                ))}
+              </select>
+              <p className="text-[10px] text-stone-500 mt-1">Påverkar bara fredagsspalten — rullen styr vilken Fredag som visas där.</p>
             </div>
-            {activeDay === 'fri' && fridayCycleWeeks > 1 && (
-              <div className="flex items-center gap-2 mt-2 text-xs text-stone-600">
-                <span>Vecka:</span>
-                <select value={currentFridayWeek} onChange={e => setCurrentFridayWeek(parseInt(e.target.value, 10))}
-                  className="px-2 py-1 rounded bg-white ring-1 ring-stone-200 tabular-nums">
-                  {Array.from({ length: fridayCycleWeeks }).map((_, i) => (
-                    <option key={i + 1} value={i + 1}>{i + 1} av {fridayCycleWeeks}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
+          )}
 
           {person && (
-            <div className="pt-2 border-t border-stone-100">
-              <button type="button" onClick={() => onOpenAssignmentEditor(person.id, activeDay)}
-                className="w-full px-3 py-2 rounded-lg text-sm bg-stone-800 text-white hover:bg-stone-900 transition inline-flex items-center justify-center gap-2">
-                <Plus size={14} />Lägg uppdrag
-              </button>
-              <p className="text-[10px] text-stone-500 mt-2 leading-relaxed">
-                Öppnar finredigeringen där du kan välja typ, tider och detaljer. För snabba ändringar – dra blocken direkt på tidslinjen.
-              </p>
+            <div className="pt-2 border-t border-stone-100 space-y-2">
+              <p className="text-[10px] uppercase tracking-wider text-stone-500">Snabbtips</p>
+              <ul className="text-xs text-stone-600 space-y-1 leading-relaxed">
+                <li>• Klick på tom yta i en dag öppnar finredigeringen</li>
+                <li>• Dra mitten av ett block för att flytta i tid eller mellan dagar</li>
+                <li>• Dra ovan-/underkanten för att korta/förlänga</li>
+                <li>• Håll <kbd className="px-1 rounded bg-stone-100 ring-1 ring-stone-200 text-[10px]">Alt</kbd> medan du drar för att kopiera</li>
+                <li>• Eller använd <strong>Duplicera</strong>-knappen på blocket</li>
+              </ul>
             </div>
           )}
         </div>
 
-        {/* Höger: tidslinje */}
+        {/* Höger: hela veckans tidsgrid */}
         <div className="rounded-2xl bg-white ring-1 ring-stone-200 p-5">
           <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
-            <div>
-              <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">{getDayMeta(activeDay).label}{activeDay === 'fri' && fridayCycleWeeks > 1 ? ` · vecka ${currentFridayWeek}` : ''}</p>
-              <h3 className="display-font text-2xl text-stone-800">{person ? person.name : 'Välj person'}</h3>
-              <p className="text-sm text-stone-600 mt-1">
-                {shift ? `Pass ${shift[0]}-${shift[1]}` : (person ? 'Inget pass denna dag. Lägg pass i Personal eller Vecka först.' : 'Välj en person till vänster.')}
-              </p>
-              {person && shift && (
-                <p className="text-xs text-stone-500 mt-1">Dra ett block för att flytta. Dra i kanterna för att justera tider. Använd Ändra för fler detaljer.</p>
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-wider text-stone-500 mb-1">Personligt veckoschema{fridayCycleWeeks > 1 ? ` · fredag v${currentFridayWeek}` : ''}</p>
+              <h3 className="display-font text-2xl text-stone-800 truncate">{person ? person.name : 'Välj person'}</h3>
+              {person && (
+                <p className="text-sm text-stone-600 mt-1">
+                  Tid 06–18 neråt, måndag till fredag åt höger. Skuggade ytor visar varje dags arbetspass.
+                </p>
               )}
             </div>
+            {altPressed && person && (
+              <span className="px-2 py-1 rounded-full bg-amber-100 ring-1 ring-amber-300 text-amber-800 text-[11px] inline-flex items-center gap-1">
+                <Sparkles size={11} />Kopiera-läge (Alt)
+              </span>
+            )}
           </div>
-
-          {person && shift && (
-            <>
-              <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4 overflow-x-auto">
-                <div className="min-w-[640px]">
-                  <div className="flex justify-between text-[10px] uppercase tracking-wider text-stone-400 mb-2">
-                    {[7,8,9,10,11,12,13,14,15,16,17].map(hour => <span key={hour}>{String(hour).padStart(2, '0')}:00</span>)}
-                  </div>
-                  <div ref={timelineRef} className="relative rounded-xl bg-white ring-1 ring-stone-200 overflow-hidden select-none"
-                    style={{ height: `${Math.max(150, 82 + tasks.length * 50)}px` }}>
-                    <div className="absolute inset-0 grid grid-cols-10 divide-x divide-stone-100" aria-hidden="true">
-                      {Array.from({ length: 10 }).map((_, idx) => <div key={idx} />)}
-                    </div>
-                    <div className="absolute top-3 h-6 rounded-full bg-stone-100 ring-1 ring-stone-200"
-                      style={toTimelineStyle(timeToMin(shift[0]), timeToMin(shift[1]))}>
-                      <span className="block text-[10px] text-stone-500 px-2 py-1 truncate">Pass</span>
-                    </div>
-                    {tasks.map((task, idx) => {
-                      const meta = getAssignmentTypeMeta(task.type);
-                      const visual = getSchoolTaskVisual(task);
-                      const preview = dragPreview?.taskId === task.id ? dragPreview : null;
-                      const visualStart = preview ? preview.previewStart : task.start;
-                      const visualEnd = preview ? preview.previewEnd : task.end;
-                      const collisionCount = getCollisionCount(task, visualStart, visualEnd);
-                      const hasCollision = collisionCount > 0;
-                      return (
-                        <div key={task.id}
-                          onPointerDown={(event) => startTaskDrag(event, task, 'move')}
-                          title={hasCollision ? `Överlappar ${collisionCount} annat block` : `${task.label || meta.label} · ${minToTime(visualStart)}-${minToTime(visualEnd)}`}
-                          className={`group absolute h-11 rounded-lg ring-1 px-3 py-1 text-left hover:shadow transition overflow-hidden touch-none cursor-grab active:cursor-grabbing ${preview ? 'z-20 scale-[1.01]' : ''}`}
-                          style={{
-                            ...toTimelineStyle(visualStart, visualEnd),
-                            top: `${48 + idx * 50}px`,
-                            borderColor: hasCollision ? '#F59E0B' : visual.borderColor,
-                            borderStyle: visual.borderStyle,
-                            backgroundColor: hasCollision ? '#FEF3C7' : visual.strongBackgroundColor,
-                            boxShadow: hasCollision ? 'inset 0 0 0 2px #F59E0B, 0 2px 8px rgba(245,158,11,0.18)' : `inset 4px 0 0 ${visual.borderColor}, 0 1px 3px rgba(28,25,23,0.10)`,
-                          }}>
-                          <span role="button" aria-label="Dra starttid" tabIndex={0}
-                            onPointerDown={(event) => startTaskDrag(event, task, 'start')}
-                            className="absolute left-0 top-0 h-full w-3 cursor-ew-resize bg-white/70 hover:bg-white border-r border-white/80" />
-                          <span role="button" aria-label="Dra sluttid" tabIndex={0}
-                            onPointerDown={(event) => startTaskDrag(event, task, 'end')}
-                            className="absolute right-0 top-0 h-full w-3 cursor-ew-resize bg-white/70 hover:bg-white border-l border-white/80" />
-                          <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[10px] text-stone-400 pointer-events-none">⋮</span>
-                          <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] text-stone-400 pointer-events-none">⋮</span>
-                          <span className="block text-[10px] tabular-nums leading-none px-1 pr-12" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>{minToTime(visualStart)}-{minToTime(visualEnd)}</span>
-                          <span className="block text-xs leading-tight mt-0.5 px-1 pr-12 truncate" style={{ fontWeight: 700, color: visual.textColor }}>{task.label || meta.label}{task.target ? ` · ${task.target}` : ''}</span>
-                          <button type="button"
-                            onPointerDown={event => event.stopPropagation()}
-                            onClick={event => { event.stopPropagation(); onOpenAssignmentEditor(person.id, activeDay); }}
-                            className="absolute right-4 top-1/2 -translate-y-1/2 rounded-md bg-white/90 px-1.5 py-0.5 text-[10px] text-stone-600 ring-1 ring-stone-200 opacity-0 group-hover:opacity-100 focus:opacity-100 transition">
-                            Ändra
-                          </button>
-                          {preview && (
-                            <span className="absolute left-1/2 -translate-x-1/2 -top-6 rounded-full bg-stone-900 text-white text-[10px] px-2 py-0.5 tabular-nums shadow">
-                              {minToTime(visualStart)}-{minToTime(visualEnd)}
-                            </span>
-                          )}
-                          {hasCollision && (
-                            <span className="absolute left-3 bottom-0.5 rounded-full bg-amber-100 text-amber-800 ring-1 ring-amber-300 px-1.5 py-0 text-[9px]" style={{ fontWeight: 700 }}>
-                              Krock
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 space-y-2">
-                {tasks.length > 0 ? tasks.map(task => {
-                  const meta = getAssignmentTypeMeta(task.type);
-                  const visual = getSchoolTaskVisual(task);
-                  const hasCollision = getCollisionCount(task) > 0;
-                  return (
-                    <div key={task.id}
-                      className="w-full rounded-xl ring-1 px-3 py-2 flex items-center gap-3 flex-wrap"
-                      style={{
-                        backgroundColor: hasCollision ? '#FFFBEB' : visual.softBackgroundColor,
-                        borderColor: hasCollision ? '#F59E0B' : `${visual.borderColor}66`,
-                        boxShadow: hasCollision ? 'inset 0 0 0 1px #F59E0B' : `inset 4px 0 0 ${visual.borderColor}`,
-                      }}>
-                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: visual.color }} />
-                      <span className="w-24 text-sm tabular-nums text-stone-700 shrink-0">{minToTime(task.start)}-{minToTime(task.end)}</span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm text-stone-800 break-words">{task.label || meta.label}</span>
-                        {task.target && <span className="block text-xs text-stone-500 break-words">{task.target}</span>}
-                      </span>
-                      <span className="text-[10px] rounded-full bg-white ring-1 ring-stone-200 text-stone-500 px-2 py-0.5">{meta.short}</span>
-                      {hasCollision && <span className="text-[10px] rounded-full bg-amber-100 ring-1 ring-amber-300 text-amber-800 px-2 py-0.5">krock</span>}
-                      <button type="button" onClick={() => onOpenAssignmentEditor(person.id, activeDay)}
-                        className="px-2 py-1 rounded-lg text-xs bg-white text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 transition shrink-0">
-                        Ändra
-                      </button>
-                      <button type="button" onClick={() => handleDelete(task)}
-                        className="px-2 py-1 rounded-lg text-xs bg-rose-50 text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100 transition inline-flex items-center gap-1 shrink-0"
-                        title="Ta bort uppdraget">
-                        <Trash2 size={12} />Ta bort
-                      </button>
-                    </div>
-                  );
-                }) : (
-                  <p className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-4 text-sm text-stone-500 text-center">
-                    Inga uppdrag på {getDayMeta(activeDay).label.toLowerCase()} ännu. Klicka "Lägg uppdrag" för att lägga första.
-                  </p>
-                )}
-              </div>
-            </>
-          )}
-
-          {person && !shift && (
-            <div className="rounded-xl bg-amber-50 ring-1 ring-amber-200 p-5 text-center">
-              <Clock size={28} className="mx-auto text-amber-600 mb-2" />
-              <p className="text-sm text-amber-900" style={{ fontWeight: 500 }}>{person.name} har inget pass på {getDayMeta(activeDay).label.toLowerCase()}.</p>
-              <p className="text-xs text-amber-800 mt-1">Lägg ett pass i Personal eller direkt i Vecka-vyn, så går det att lägga uppdrag här.</p>
-            </div>
-          )}
 
           {!person && (
             <div className="rounded-xl bg-stone-50 ring-1 ring-stone-200 p-8 text-center">
               <Users size={28} className="mx-auto text-stone-400 mb-2" />
               <p className="text-sm text-stone-700">Välj en person till vänster för att börja bygga ett personligt schema.</p>
+            </div>
+          )}
+
+          {person && (
+            <div className="overflow-x-auto">
+              <div className="min-w-[760px]">
+                {/* Header-rad: tom hörna + dag-rubriker */}
+                <div className="grid" style={{ gridTemplateColumns: '56px 1fr' }}>
+                  <div className="px-2 pb-1 text-[10px] uppercase tracking-wider text-stone-400">Tid</div>
+                  <div className="grid" style={{ gridTemplateColumns: `repeat(${weekDayList.length}, 1fr)` }}>
+                    {dayDataList.map(d => (
+                      <div key={d.key} className="px-2 pb-1">
+                        <p className="text-sm text-stone-800" style={{ fontWeight: 600 }}>{d.label}</p>
+                        <p className="text-[11px] text-stone-500 tabular-nums">
+                          {d.shift ? `${d.shift[0]}–${d.shift[1]}` : <span className="text-stone-400">Ledig</span>}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Tidsgrid: tid-spalt + dag-area */}
+                <div className="grid" style={{ gridTemplateColumns: '56px 1fr' }}>
+                  {/* Vänster: tim-etiketter */}
+                  <div className="relative" style={{ height: `${GRID_HEIGHT}px` }}>
+                    {hourMarks.map(min => {
+                      const top = ((min - TIMELINE_START) / TIMELINE_SPAN) * 100;
+                      return (
+                        <div key={min}
+                          className="absolute left-0 right-0 pr-2 text-right text-[11px] text-stone-500 tabular-nums"
+                          style={{ top: `${top}%`, transform: 'translateY(-50%)' }}>
+                          {minToTime(min)}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Höger: dag-grid med alla blocks */}
+                  <div
+                    ref={gridRef}
+                    className={`relative rounded-xl bg-stone-50 ring-1 ring-stone-200 overflow-hidden select-none ${altPressed ? 'cursor-copy' : ''}`}
+                    style={{ height: `${GRID_HEIGHT}px` }}
+                  >
+                    {/* Tim-rader (bakgrund) */}
+                    {hourMarks.slice(1, -1).map(min => {
+                      const top = ((min - TIMELINE_START) / TIMELINE_SPAN) * 100;
+                      return (
+                        <div key={`h-${min}`}
+                          className="absolute left-0 right-0 border-t border-stone-200 pointer-events-none"
+                          style={{ top: `${top}%` }} />
+                      );
+                    })}
+
+                    {/* Dag-kolumner: skiljelinjer + skuggat shift-område + click-target */}
+                    {dayDataList.map((d, dayIdx) => {
+                      const colLeft = (dayIdx / weekDayList.length) * 100;
+                      const colWidth = 100 / weekDayList.length;
+                      const isDragTarget = dragPreview && dragPreview.previewDayKey === d.key && dragPreview.mode === 'move';
+                      const targetHasNoShift = isDragTarget && !d.shift;
+                      return (
+                        <React.Fragment key={d.key}>
+                          {/* Vertikal skiljelinje */}
+                          {dayIdx > 0 && (
+                            <div className="absolute top-0 bottom-0 border-l border-stone-200 pointer-events-none"
+                              style={{ left: `${colLeft}%` }} />
+                          )}
+                          {/* Skuggat shift-område */}
+                          {d.shift && (() => {
+                            const shiftStart = timeToMin(d.shift[0]);
+                            const shiftEnd = timeToMin(d.shift[1]);
+                            const top = ((Math.max(TIMELINE_START, shiftStart) - TIMELINE_START) / TIMELINE_SPAN) * 100;
+                            const height = ((Math.min(TIMELINE_END, shiftEnd) - Math.max(TIMELINE_START, shiftStart)) / TIMELINE_SPAN) * 100;
+                            return (
+                              <div className="absolute bg-white pointer-events-none"
+                                style={{
+                                  left: `${colLeft}%`, width: `${colWidth}%`,
+                                  top: `${top}%`, height: `${height}%`,
+                                }}>
+                                <span className="absolute top-1 left-2 text-[9px] uppercase tracking-wider text-stone-400">Pass</span>
+                              </div>
+                            );
+                          })()}
+                          {/* Drag-target overlay: röd om måldagen saknar pass */}
+                          {isDragTarget && (
+                            <div className="absolute pointer-events-none border-2 rounded-md"
+                              style={{
+                                left: `${colLeft}%`, width: `${colWidth}%`, top: 0, bottom: 0,
+                                borderColor: targetHasNoShift ? '#DC2626' : '#3D7A8C',
+                                backgroundColor: targetHasNoShift ? 'rgba(220,38,38,0.05)' : 'rgba(61,122,140,0.05)',
+                              }}>
+                              {targetHasNoShift && (
+                                <span className="absolute top-2 left-2 right-2 text-center text-[10px] rounded bg-rose-100 ring-1 ring-rose-300 text-rose-800 px-1 py-0.5">
+                                  Ledig dag — kan inte släppas här
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {/* Click-target för "lägg uppdrag på denna dag" */}
+                          <button type="button"
+                            onClick={(e) => { e.stopPropagation(); handleEmptyDayClick(d.key); }}
+                            className={`absolute top-0 bottom-0 ${d.shift ? 'hover:bg-stone-100/40' : 'hover:bg-stone-200/30'} transition`}
+                            style={{ left: `${colLeft}%`, width: `${colWidth}%` }}
+                            title={d.shift ? `Lägg nytt uppdrag på ${d.label.toLowerCase()}` : `${person.name} är ledig på ${d.label.toLowerCase()}`}
+                            aria-label={`Lägg uppdrag på ${d.label}`} />
+                        </React.Fragment>
+                      );
+                    })}
+
+                    {/* Block per dag */}
+                    {dayDataList.map((d, dayIdx) => (
+                      d.tasks.map(task => {
+                        const meta = getAssignmentTypeMeta(task.type);
+                        const visual = getSchoolTaskVisual(task);
+                        const preview = dragPreview?.taskId === task.id ? dragPreview : null;
+                        const renderDayIdx = preview ? preview.previewDayIdx : dayIdx;
+                        const visualStart = preview ? preview.previewStart : task.start;
+                        const visualEnd = preview ? preview.previewEnd : task.end;
+                        // Krock-check görs mot ursprungsdagen om vi inte flyttat dag, annars mot måldagen
+                        const checkDayKey = preview ? preview.previewDayKey : d.key;
+                        const collisionCount = getCollisionCount(task, checkDayKey, visualStart, visualEnd);
+                        const hasCollision = collisionCount > 0;
+                        const duration = visualEnd - visualStart;
+                        const isCompact = duration < 30; // < 30 min: kompakt layout
+                        return (
+                          <div key={task.id}
+                            onPointerDown={(event) => startTaskDrag(event, task, d.key, 'move')}
+                            title={hasCollision ? `Överlappar ${collisionCount} annat block` : `${task.label || meta.label} · ${minToTime(visualStart)}-${minToTime(visualEnd)}`}
+                            className={`group absolute rounded-md ring-1 px-1.5 py-1 hover:shadow-md transition overflow-hidden touch-none cursor-grab active:cursor-grabbing ${preview ? 'z-20 shadow-lg' : 'z-10'} ${preview?.copy ? 'opacity-90' : ''}`}
+                            style={{
+                              ...toBlockStyle(visualStart, visualEnd, renderDayIdx),
+                              borderColor: hasCollision ? '#F59E0B' : visual.borderColor,
+                              borderStyle: visual.borderStyle,
+                              backgroundColor: hasCollision ? '#FEF3C7' : visual.strongBackgroundColor,
+                              boxShadow: hasCollision
+                                ? 'inset 0 0 0 2px #F59E0B, 0 2px 8px rgba(245,158,11,0.18)'
+                                : `inset 4px 0 0 ${visual.borderColor}, 0 1px 3px rgba(28,25,23,0.10)`,
+                            }}>
+                            {/* Övre drag-kant: justera starttid */}
+                            <span role="button" aria-label="Dra starttid" tabIndex={0}
+                              onPointerDown={(event) => startTaskDrag(event, task, d.key, 'start')}
+                              className="absolute left-0 right-0 top-0 h-2 cursor-ns-resize bg-white/40 hover:bg-white/80 border-b border-white/60" />
+                            {/* Undre drag-kant: justera sluttid */}
+                            <span role="button" aria-label="Dra sluttid" tabIndex={0}
+                              onPointerDown={(event) => startTaskDrag(event, task, d.key, 'end')}
+                              className="absolute left-0 right-0 bottom-0 h-2 cursor-ns-resize bg-white/40 hover:bg-white/80 border-t border-white/60" />
+                            {/* Innehåll */}
+                            <div className="pt-1.5 pb-1.5 pointer-events-none">
+                              <span className="block text-[10px] tabular-nums leading-none" style={{ color: hasCollision ? '#92400E' : visual.borderColor, fontWeight: 700 }}>
+                                {minToTime(visualStart)}–{minToTime(visualEnd)}
+                              </span>
+                              {!isCompact && (
+                                <span className="block text-[11px] leading-tight mt-0.5 break-words" style={{ fontWeight: 600, color: visual.textColor }}>
+                                  {task.label || meta.label}
+                                </span>
+                              )}
+                              {!isCompact && task.target && (
+                                <span className="block text-[10px] leading-tight text-stone-500 mt-0.5 break-words">
+                                  {task.target}
+                                </span>
+                              )}
+                            </div>
+                            {/* Hover-knappar: Ändra · Duplicera · Ta bort */}
+                            <div className="absolute right-0.5 top-0.5 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition pointer-events-auto">
+                              <button type="button"
+                                onPointerDown={event => event.stopPropagation()}
+                                onClick={event => { event.stopPropagation(); onOpenAssignmentEditor?.(person.id, d.key); }}
+                                className="rounded bg-white/95 px-1.5 py-0.5 text-[9px] text-stone-700 ring-1 ring-stone-200 hover:bg-white"
+                                title="Öppna finredigering">
+                                Ändra
+                              </button>
+                              <button type="button"
+                                onPointerDown={event => event.stopPropagation()}
+                                onClick={event => { event.stopPropagation(); handleDuplicate(task, d.key); }}
+                                className="rounded bg-white/95 px-1.5 py-0.5 text-[9px] text-stone-700 ring-1 ring-stone-200 hover:bg-white"
+                                title="Skapa en kopia på samma dag">
+                                Dupl.
+                              </button>
+                              <button type="button"
+                                onPointerDown={event => event.stopPropagation()}
+                                onClick={event => { event.stopPropagation(); handleDelete(task, d.key); }}
+                                className="rounded bg-rose-50/95 px-1.5 py-0.5 text-[9px] text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100"
+                                title="Ta bort uppdraget">
+                                Ta bort
+                              </button>
+                            </div>
+                            {preview && (
+                              <span className="absolute left-1/2 -translate-x-1/2 -top-6 rounded-full bg-stone-900 text-white text-[10px] px-2 py-0.5 tabular-nums shadow whitespace-nowrap">
+                                {preview.copy ? '⊕ ' : ''}{minToTime(visualStart)}–{minToTime(visualEnd)}{preview.previewDayKey !== preview.originDayKey ? ` · ${getDayMeta(preview.previewDayKey).short}` : ''}
+                              </span>
+                            )}
+                            {hasCollision && !isCompact && (
+                              <span className="absolute left-1 bottom-0.5 rounded-full bg-amber-100 text-amber-800 ring-1 ring-amber-300 px-1.5 py-0 text-[9px]" style={{ fontWeight: 700 }}>
+                                Krock
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })
+                    ))}
+                  </div>
+                </div>
+
+                {/* "Lägg uppdrag"-rad under griden för enklast åtkomst */}
+                <div className="mt-3 grid" style={{ gridTemplateColumns: '56px 1fr' }}>
+                  <div />
+                  <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${weekDayList.length}, 1fr)` }}>
+                    {dayDataList.map(d => (
+                      <button key={d.key} type="button"
+                        onClick={() => handleEmptyDayClick(d.key)}
+                        disabled={!d.shift}
+                        className={`px-2 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1 transition ring-1 ${d.shift
+                          ? 'bg-white text-stone-700 ring-stone-200 hover:bg-stone-50'
+                          : 'bg-stone-100 text-stone-400 ring-stone-200 cursor-not-allowed'}`}
+                        title={d.shift ? `Lägg uppdrag på ${d.label.toLowerCase()}` : `${person.name} är ledig på ${d.label.toLowerCase()}`}>
+                        <Plus size={11} />{d.short}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -12880,6 +13123,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v92',
+      title: 'Personligt schema som veckogrid',
+      body: 'Personligt schema visar nu hela veckan samtidigt — tid neråt 06–18, måndag till fredag som kolumner. Dra block för att flytta i tid eller mellan dagar, dra över- eller underkanten för att korta/förlänga, håll Alt för att kopiera istället. Klick på tom yta öppnar finredigeringen med rätt dag förifylld. Samma palett som Excel-exporten.',
+    },
     {
       version: 'v91',
       title: 'Verktyg, färgwizard och Excel-export',
