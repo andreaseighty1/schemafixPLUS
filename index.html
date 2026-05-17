@@ -808,6 +808,10 @@ function assignmentReleaseDefault(typeId, breakFlexibility = defaultBreakFlexibi
 function assignmentSupportsSchoolRole(typeId) {
   return ['lesson', 'studySupport', 'yard', 'break', 'pedLunch', 'meeting', 'collab', 'resource', 'prep', 'planning'].includes(typeId);
 }
+function defaultSchoolRoleForAssignmentType(typeId, fallback = 'owner') {
+  if (typeId === 'resource') return 'resource';
+  return assignmentSupportsSchoolRole(typeId) ? normalizeSchoolTaskRole(fallback) : 'owner';
+}
 function assignmentIsBoundaryType(typeId) {
   return ['opening', 'closing'].includes(typeId);
 }
@@ -3728,7 +3732,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 57,
+    version: 58,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -4486,7 +4490,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v115</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v116</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -11069,13 +11073,14 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
       label: labelOverride || inferAssignmentLabel(type),
       start: suggested.start,
       end: suggested.end,
-      target: '',
-      notes: '',
-      mustCover: assignmentRequiresCoverByDefault(type),
-      preferredCoverPersonId: '',
-      breakFlexibility: defaultBreakFlexibility(type),
-      releaseForCover: assignmentReleaseDefault(type),
-      durationMinutes: options.lockDuration ? duration : null,
+        target: '',
+        notes: '',
+        mustCover: assignmentRequiresCoverByDefault(type),
+        preferredCoverPersonId: '',
+        schoolRole: defaultSchoolRoleForAssignmentType(type),
+        breakFlexibility: defaultBreakFlexibility(type),
+        releaseForCover: assignmentReleaseDefault(type),
+        durationMinutes: options.lockDuration ? duration : null,
     });
     setDraftTasks(prev => [item, ...prev]);
   };
@@ -11413,7 +11418,7 @@ function AssignmentEditorModal({ person, staff = [], assignments = {}, fridayCyc
                               mustCover: assignmentRequiresCoverByDefault(nextType),
                               breakFlexibility: defaultBreakFlexibility(nextType),
                               releaseForCover: assignmentReleaseDefault(nextType),
-                              schoolRole: nextType === 'resource' ? 'resource' : (assignmentSupportsSchoolRole(nextType) ? (task.schoolRole || 'owner') : 'owner'),
+                              schoolRole: defaultSchoolRoleForAssignmentType(nextType, task.schoolRole || 'owner'),
                             });
                           }}>
                           {ASSIGNMENT_TYPES.map(type => (
@@ -14597,6 +14602,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v116',
+      title: 'Resurs får rätt roll direkt',
+      body: 'När ett nytt uppdrag skapas som Resurs sätts rollen i blocket automatiskt till Resurs, även via snabbmallarna.',
+    },
     {
       version: 'v115',
       title: 'Smidigare fredagar i Personligt schema',
