@@ -3531,7 +3531,7 @@ function FritidsSchemaApp() {
 
   // Hjälp: bygg datapaketet att skriva till fil
   const buildSaveData = () => ({
-    version: 39,
+    version: 40,
     exportedAt: new Date().toISOString(),
     staff: normalizeStaffList(staff, fridayCycleWeeks),
     departments, coverageBlocks: normalizedCoverageBlocks, passBank: normalizePassBank(passBank), assignments: normalizeAssignmentsMap(assignments, staff, fridayCycleWeeks), assignmentWindows: normalizedAssignmentWindows, driftState: normalizeDriftState(driftState, staff, fridayCycleWeeks), fridayCycleWeeks, fridayTemplateRotation, workflowMode,
@@ -3807,6 +3807,54 @@ function FritidsSchemaApp() {
       return next;
     });
     setAssignmentEditor(null);
+  };
+
+  const importPersonalScheduleForPerson = ({ personId, importData }) => {
+    const target = staff.find(member => String(member.id) === String(personId));
+    if (!target || !importData?.days) return false;
+    const importedDays = ALL_DAY_KEYS
+      .map(dayKey => ({ dayKey, data: importData.days[dayKey] }))
+      .filter(item => item.data && (item.data.shift || (Array.isArray(item.data.tasks) && item.data.tasks.length > 0)));
+    if (importedDays.length === 0) return false;
+
+    setStaff(prev => prev.map(member => {
+      if (String(member.id) !== String(target.id)) return member;
+      let next = member;
+      importedDays.forEach(({ dayKey, data }) => {
+        if (data.shift) {
+          const fridayWeek = dayKey === 'fri' ? currentFridayWeek : 1;
+          const base = dayKey === 'fri' && next.fridayMode == null
+            ? { ...next, fridayMode: 'passbank', hasFridayRotation: false }
+            : next;
+          next = buildPreviewPerson(base, dayKey, data.shift, fridayWeek, fridayCycleWeeks);
+          next = { ...next, daysOff: (next.daysOff || []).filter(key => key !== dayKey) };
+        }
+      });
+      return normalizePerson(next, fridayCycleWeeks);
+    }));
+
+    setAssignments(prev => {
+      let next = prev;
+      importedDays.forEach(({ dayKey, data }) => {
+        const fridayOptions = {
+          fridayWeek: dayKey === 'fri' ? currentFridayWeek : 1,
+          cycleWeeks: fridayCycleWeeks,
+          fridayTemplateRotation,
+        };
+        const cleanTasks = (Array.isArray(data.tasks) ? data.tasks : [])
+          .map(task => normalizeAssignment({
+            ...task,
+            id: createAssignmentId(),
+          }, {
+            allowedStaffIds: new Set(staff.map(person => String(person.id))),
+            ownerId: target.id,
+          }))
+          .filter(Boolean);
+        next = replaceAssignmentsForDay(next, target.id, dayKey, cleanTasks, staff, fridayOptions);
+      });
+      return next;
+    });
+    return true;
   };
 
   const dayData = useMemo(() => {
@@ -4167,7 +4215,7 @@ function FritidsSchemaApp() {
             <OwlMark size={46} />
             <div className="min-w-0">
               <h1 className="display-font text-lg text-stone-800 leading-none" style={{ letterSpacing: '-0.01em' }}>SchemaFIX</h1>
-              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v94</p>
+              <p className="text-[10px] text-stone-500 mt-0.5">Skolbemanning · prototyp v95</p>
             </div>
           </div>
           <nav className="flex-1 flex flex-col gap-4">
@@ -4296,6 +4344,7 @@ function FritidsSchemaApp() {
               onUpdateAssignment={updateSchoolPosition}
               onDeleteAssignment={deleteSchoolPosition}
               onAddAssignment={addSchoolPosition}
+              onImportPersonalSchedule={importPersonalScheduleForPerson}
             />}
             {(view === 'schedule' || view === 'drift') && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -6320,6 +6369,313 @@ function exportPersonalScheduleToXlsx({ person, assignments, fridayOptions }) {
   }
 }
 
+// ==================== EXCEL-IMPORT (Personligt schema) ====================
+// Läser skolans personliga Excel-scheman och översätter dem till samma
+// assignment-format som Personligt schema, Uppdrag, Skola och Drift använder.
+
+function normalizeExcelText(value) {
+  return String(value == null ? '' : value)
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
+function foldText(value) {
+  return normalizeExcelText(value)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function parseImportTimeValue(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value >= 0 && value < 1) return roundToStep(value * 24 * 60);
+    if (value >= 0 && value <= 24) return roundToStep(value * 60);
+  }
+  const text = normalizeExcelText(value).replace(/[–—]/g, '-').replace(/\./g, ':');
+  const match = text.match(/\b(\d{1,2}):(\d{2})\b/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function parseImportTimeRange(value) {
+  const text = normalizeExcelText(value).replace(/[–—]/g, '-').replace(/\./g, ':');
+  const match = text.match(/\b(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\b/);
+  if (!match) return null;
+  const start = Number(match[1]) * 60 + Number(match[2]);
+  const end = Number(match[3]) * 60 + Number(match[4]);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > 24 * 60) return null;
+  return { start: roundToStep(start), end: roundToStep(end) };
+}
+
+function cleanImportLabel(value) {
+  return normalizeExcelText(value)
+    .replace(/\b\d{1,2}[:.]\d{2}\s*[-–—]\s*\d{1,2}[:.]\d{2}\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getImportDayKey(value) {
+  const text = foldText(value);
+  if (!text) return '';
+  if (text.includes('mandag') || text.includes('man') || text.includes('mon')) return 'mon';
+  if (text.includes('tisdag') || text.includes('tis') || text.includes('tue')) return 'tue';
+  if (text.includes('onsdag') || text.includes('ons') || text.includes('wed')) return 'wed';
+  if (text.includes('torsdag') || text.includes('tor') || text.includes('thu')) return 'thu';
+  if (text.includes('fredag') || text.includes('fre') || text.includes('fri')) return 'fri';
+  return '';
+}
+
+function inferImportedAssignmentType(label, colorHex = '') {
+  const text = foldText(label);
+  if (!text) return 'other';
+  if (text.includes('egen rast') || text === 'rast' || text.includes('rast 30') || text.includes('paus')) return 'break';
+  if (text.includes('ped') && text.includes('lunch')) return 'pedLunch';
+  if (text.includes('rastvard') || text.includes('rastv') || text.includes('rastkul')) return 'yard';
+  if (text.includes('samverkan')) return 'collab';
+  if (text.includes('studie')) return 'studySupport';
+  if (text.includes('resurs')) return 'resource';
+  if (text.includes('planering') || text.includes('egen plan') || text === 'plan' || text.includes('stalltid') || text === 'fth' || text.includes('fth ')) return 'planning';
+  if (text.includes('konferens') || text.includes('konferans') || text.includes('konf') || text.includes('mote') || text.includes('arbetslag') || text.includes('utv. grupp')) return 'meeting';
+  if (text.includes('fritids') || text.includes('skolgard')) return 'fritids';
+  if (
+    /\b(sv|ma|no|so|eng)\b/.test(text) ||
+    text.includes('svenska') || text.includes('matematik') || text.includes('engelska') ||
+    text.includes('slojd') || text.includes('idrott') || text.includes('bild') || text.includes('musik') ||
+    text.includes('gympa') || text.includes('lektion')
+  ) return 'lesson';
+  return colorHex ? 'other' : 'other';
+}
+
+function defaultImportedDuration(type) {
+  if (type === 'break') return 30;
+  if (type === 'pedLunch') return 20;
+  if (type === 'yard') return 20;
+  if (type === 'lesson') return 40;
+  if (type === 'meeting' || type === 'planning') return 60;
+  return 30;
+}
+
+function getImportCellText(ws, r, c) {
+  const XLSX = window.XLSX;
+  const cell = ws[XLSX.utils.encode_cell({ r, c })];
+  if (!cell) return '';
+  return normalizeExcelText(cell.w != null ? cell.w : cell.v);
+}
+
+function getImportCellFillHex(ws, r, c) {
+  const XLSX = window.XLSX;
+  const cell = ws[XLSX.utils.encode_cell({ r, c })];
+  const raw = cell?.s?.fill?.fgColor?.rgb || cell?.s?.fgColor?.rgb || cell?.s?.fill?.bgColor?.rgb || '';
+  const clean = String(raw || '').replace(/^FF/i, '').replace('#', '').slice(-6);
+  return /^[0-9a-f]{6}$/i.test(clean) ? `#${clean.toUpperCase()}` : '';
+}
+
+function findNearbyImportTimeRange(ws, row, col, usedRows = new Set()) {
+  const same = parseImportTimeRange(getImportCellText(ws, row, col));
+  if (same && !usedRows.has(row)) return { ...same, sourceRow: row };
+  for (let offset = 1; offset <= 3; offset += 1) {
+    const previous = parseImportTimeRange(getImportCellText(ws, row - offset, col));
+    if (previous && !usedRows.has(row - offset)) return { ...previous, sourceRow: row - offset };
+  }
+  for (let offset = 1; offset <= 2; offset += 1) {
+    const next = parseImportTimeRange(getImportCellText(ws, row + offset, col));
+    if (next && !usedRows.has(row + offset)) return { ...next, sourceRow: row + offset };
+  }
+  return null;
+}
+
+function findPersonalScheduleHeader(ws, range) {
+  for (let r = range.s.r; r <= Math.min(range.e.r, range.s.r + 20); r += 1) {
+    const dayCols = {};
+    for (let c = range.s.c; c <= range.e.c; c += 1) {
+      const dayKey = getImportDayKey(getImportCellText(ws, r, c));
+      if (dayKey && !dayCols[dayKey]) dayCols[dayKey] = c;
+    }
+    if (Object.keys(dayCols).length >= 3) {
+      const firstDayCol = Math.min(...Object.values(dayCols));
+      return { row: r, dayCols, timeCol: Math.max(range.s.c, firstDayCol - 1) };
+    }
+  }
+  return null;
+}
+
+function buildImportRowTimeReader(ws, range, timeCol) {
+  const anchors = [];
+  for (let r = range.s.r; r <= range.e.r; r += 1) {
+    const minute = parseImportTimeValue(getImportCellText(ws, r, timeCol));
+    if (minute != null) anchors.push({ row: r, minute });
+  }
+  anchors.sort((a, b) => a.row - b.row);
+  const medianStep = (() => {
+    const steps = [];
+    for (let i = 1; i < anchors.length; i += 1) {
+      const rowDiff = anchors[i].row - anchors[i - 1].row;
+      const minDiff = anchors[i].minute - anchors[i - 1].minute;
+      if (rowDiff > 0 && minDiff > 0) steps.push(minDiff / rowDiff);
+    }
+    if (steps.length === 0) return 15;
+    return steps.sort((a, b) => a - b)[Math.floor(steps.length / 2)] || 15;
+  })();
+  return (row) => {
+    const exact = anchors.find(anchor => anchor.row === row);
+    if (exact) return exact.minute;
+    let prev = null;
+    let next = null;
+    for (const anchor of anchors) {
+      if (anchor.row < row) prev = anchor;
+      if (anchor.row > row) { next = anchor; break; }
+    }
+    if (prev && next && next.row > prev.row) {
+      const ratio = (row - prev.row) / (next.row - prev.row);
+      return roundToStep(prev.minute + ratio * (next.minute - prev.minute));
+    }
+    if (prev) return roundToStep(prev.minute + (row - prev.row) * medianStep);
+    return null;
+  };
+}
+
+function findImportStopRow(ws, range, headerRow) {
+  for (let r = headerRow + 8; r <= range.e.r; r += 1) {
+    const rowText = [];
+    for (let c = range.s.c; c <= range.e.c; c += 1) {
+      const text = foldText(getImportCellText(ws, r, c));
+      if (text) rowText.push(text);
+    }
+    const joined = rowText.join(' ');
+    if (/\b(sign|efternamn|fornamn|personnummer|adress|telefon|anstalld som)\b/.test(joined)) {
+      return r - 1;
+    }
+  }
+  return range.e.r;
+}
+
+function readPersonalScheduleExcelFile(file) {
+  return new Promise((resolve, reject) => {
+    const XLSX = window.XLSX;
+    if (!XLSX) {
+      reject(new Error('Excel-biblioteket kunde inte laddas.'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Kunde inte läsa filen.'));
+    reader.onload = () => {
+      try {
+        const wb = XLSX.read(reader.result, { type: 'array', cellStyles: true, cellDates: false });
+        const sheetName = wb.SheetNames?.[0];
+        const ws = sheetName ? wb.Sheets[sheetName] : null;
+        if (!ws || !ws['!ref']) throw new Error('Filen saknar läsbart kalkylblad.');
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        const header = findPersonalScheduleHeader(ws, range);
+        if (!header) throw new Error('Hittade ingen rad med måndag-fredag.');
+        const rowToMinute = buildImportRowTimeReader(ws, range, header.timeCol);
+        const stopRow = findImportStopRow(ws, range, header.row);
+        const days = {};
+        const warnings = [];
+
+        for (const day of PS_EXPORT_DAYS) {
+          const col = header.dayCols[day.key];
+          if (col == null) continue;
+          const dayResult = { shift: null, tasks: [] };
+          let shiftRow = null;
+          for (let r = header.row + 1; r <= Math.min(stopRow, header.row + 5); r += 1) {
+            const rangeValue = parseImportTimeRange(getImportCellText(ws, r, col));
+            if (rangeValue) {
+              dayResult.shift = [minToTime(rangeValue.start), minToTime(rangeValue.end)];
+              shiftRow = r;
+              break;
+            }
+          }
+
+          const entries = [];
+          const usedTimeRows = new Set();
+          for (let r = header.row + 1; r <= stopRow; r += 1) {
+            if (r === shiftRow) continue;
+            const raw = getImportCellText(ws, r, col);
+            const text = normalizeExcelText(raw);
+            if (!text) continue;
+            const folded = foldText(text);
+            if (folded.includes('arb.tid') || folded === 'ledig' || folded === 'rullande' || getImportDayKey(text)) continue;
+            const explicitRange = parseImportTimeRange(text);
+            const label = cleanImportLabel(text);
+            if (explicitRange && !label) {
+              const previous = entries[entries.length - 1];
+              if (previous && !previous.explicitEnd && r - previous.sourceRow <= 2) {
+                previous.start = explicitRange.start;
+                previous.end = explicitRange.end;
+                previous.explicitEnd = true;
+                usedTimeRows.add(r);
+              }
+              continue;
+            }
+            if (!label || parseImportTimeValue(label) != null) continue;
+
+            const rangeForTask = findNearbyImportTimeRange(ws, r, col, usedTimeRows);
+            const type = inferImportedAssignmentType(label, getImportCellFillHex(ws, r, col));
+            const inferredStart = rowToMinute(r);
+            const start = rangeForTask ? rangeForTask.start : inferredStart;
+            if (start == null) {
+              warnings.push(`${day.label}: hoppade över "${label}" eftersom tiden inte gick att läsa.`);
+              continue;
+            }
+            const end = rangeForTask
+              ? rangeForTask.end
+              : Math.min(24 * 60, start + defaultImportedDuration(type));
+            entries.push({
+              id: createAssignmentId(),
+              type,
+              label,
+              start,
+              end,
+              durationMinutes: Math.max(SLOT_STEP_MINUTES, end - start),
+              target: '',
+              notes: file?.name ? `Importerad från ${file.name}` : 'Importerad från Excel',
+              mustCover: assignmentRequiresCoverByDefault(type),
+              releaseForCover: assignmentReleaseDefault(type),
+              schoolRole: 'owner',
+              sourceRow: r,
+              explicitEnd: !!rangeForTask,
+            });
+            if (rangeForTask?.sourceRow != null) usedTimeRows.add(rangeForTask.sourceRow);
+          }
+
+          entries.sort((a, b) => a.start - b.start || a.sourceRow - b.sourceRow);
+          for (let i = 0; i < entries.length; i += 1) {
+            const task = entries[i];
+            if (!task.explicitEnd) {
+              const next = entries.slice(i + 1).find(item => item.start > task.start);
+              const shiftEnd = dayResult.shift ? timeToMin(dayResult.shift[1]) : null;
+              const maxEnd = next ? next.start : (shiftEnd || task.end);
+              task.end = Math.max(task.start + SLOT_STEP_MINUTES, Math.min(task.end, maxEnd));
+              task.durationMinutes = task.end - task.start;
+            }
+            delete task.sourceRow;
+            delete task.explicitEnd;
+          }
+          dayResult.tasks = sortAssignments(entries.map(task => normalizeAssignment(task)).filter(Boolean));
+          if (!dayResult.shift && dayResult.tasks.length > 0) {
+            const minStart = Math.min(...dayResult.tasks.map(task => task.start));
+            const maxEnd = Math.max(...dayResult.tasks.map(task => task.end));
+            dayResult.shift = [minToTime(minStart), minToTime(maxEnd)];
+            warnings.push(`${day.label}: arbetspass saknades i Excel, appen anvande forsta till sista blocket.`);
+          }
+          days[day.key] = dayResult;
+        }
+
+        const possibleName = normalizeExcelText(getImportCellText(ws, header.row - 1, 0) || getImportCellText(ws, header.row - 1, 1));
+        resolve({ fileName: file?.name || '', sheetName, personName: possibleName, days, warnings });
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 
 // Personcentrerad veckovy. Visar EN persons HELA vecka som ett vertikalt
 // tidsschema där varje dag är en kolumn och tiden löper neråt (06-18, samma
@@ -6341,6 +6697,7 @@ function PersonalScheduleView({
   onUpdateAssignment,
   onDeleteAssignment,
   onAddAssignment,
+  onImportPersonalSchedule,
 }) {
   const [selectedPersonId, setSelectedPersonId] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
@@ -6350,7 +6707,9 @@ function PersonalScheduleView({
   const [altPressed, setAltPressed] = useState(false);
   const gridRef = useRef(null);
   const dragPreviewRef = useRef(null);
+  const importInputRef = useRef(null);
   const [dragPreview, setDragPreview] = useState(null);
+  const [importBusy, setImportBusy] = useState(false);
 
   useEffect(() => {
     const onDown = (e) => { if (e.altKey) setAltPressed(true); };
@@ -6624,6 +6983,52 @@ function PersonalScheduleView({
     onDeleteAssignment?.({ personId: person.id, dayKey, taskId: task.id });
   };
 
+  const handleImportFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!person) {
+      alert('Välj en person först. Importen läggs på den person som är vald i listan.');
+      return;
+    }
+    setImportBusy(true);
+    try {
+      const importData = await readPersonalScheduleExcelFile(file);
+      const dayLines = PS_EXPORT_DAYS.map(day => {
+        const data = importData.days?.[day.key];
+        if (!data) return null;
+        const shiftText = data.shift ? `${data.shift[0]}–${data.shift[1]}` : 'inget pass';
+        return `${day.label}: ${shiftText}, ${data.tasks.length} block`;
+      }).filter(Boolean);
+      const warningText = importData.warnings?.length
+        ? `\n\nObs:\n${importData.warnings.slice(0, 5).join('\n')}${importData.warnings.length > 5 ? '\n...' : ''}`
+        : '';
+      const firstName = foldText(person.name).split(' ')[0] || '';
+      const nameText = importData.personName && firstName && !foldText(importData.personName).includes(firstName)
+        ? `\n\nExcel verkar gälla: ${importData.personName}\nVald person i appen: ${person.name}`
+        : '';
+      const ok = confirm(
+        `Importera personligt schema från "${file.name}" till ${person.name}?\n\n` +
+        `${dayLines.join('\n') || 'Inga dagar hittades.'}\n\n` +
+        'De importerade dagarnas uppdragsblock ersätter nuvarande block för samma person.' +
+        nameText +
+        warningText
+      );
+      if (!ok) return;
+      const didImport = onImportPersonalSchedule?.({ personId: person.id, importData });
+      if (!didImport) {
+        alert('Importen hittade inget som kunde läggas in.');
+        return;
+      }
+      alert(`Import klart för ${person.name}.\n\n${dayLines.join('\n')}`);
+    } catch (err) {
+      console.error('Kunde inte importera personligt schema:', err);
+      alert(`Kunde inte importera Excel-filen.\n\n${err?.message || 'Okänt fel'}`);
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
   const dept = person ? getDept(person.deptId, departments) : null;
   const roleLabel = person ? getStaffRoleLabel(person.employmentRole) : '';
 
@@ -6641,6 +7046,22 @@ function PersonalScheduleView({
       </TabIntro>
 
       <div className="flex items-center justify-end gap-3 flex-wrap -mt-3">
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          className="hidden"
+          onChange={handleImportFile}
+        />
+        <button
+          type="button"
+          onClick={() => importInputRef.current?.click()}
+          disabled={!person || importBusy}
+          className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition ring-1 ${person && !importBusy ? 'bg-white text-stone-700 ring-stone-200 hover:bg-stone-50' : 'bg-stone-100 text-stone-400 ring-stone-200 cursor-not-allowed'}`}
+          title={person ? 'LÃ¤s in arbetspass och block frÃ¥n ett personligt Excel-schema' : 'VÃ¤lj en person fÃ¶rst'}
+        >
+          <Upload size={14} />{importBusy ? 'Importerar...' : 'Importera Excel'}
+        </button>
         <button
           type="button"
           onClick={() => setShowColorWizard(true)}
@@ -13174,6 +13595,11 @@ function ExampleDataModal({ scenarios, onSelect, onClose }) {
 
 function WhatsNewModal({ onClose }) {
   const updates = [
+    {
+      version: 'v95',
+      title: 'Excel-import till Personligt schema',
+      body: 'Personligt schema kan nu importera en vald persons Excel-schema. Importen läser arbetspass och försöker översätta block, klockslag och vanliga etiketter som rastvärd, pedagogisk lunch, samverkan, planering och lektioner till appens uppdrag.',
+    },
     {
       version: 'v94',
       title: 'Stabilare hoverpanel i Personligt schema',
